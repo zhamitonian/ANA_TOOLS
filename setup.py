@@ -7,6 +7,7 @@ setup(
     description="Belle analysis tools",
     author="Zheng Wang",
     author_email="wangz731@mail.ustc.edu.cn",
+    url="https://github.com/zhamitonian/ANA_TOOLS",
     install_requires=[
         # List dependencies here
     ],

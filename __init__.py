@@ -13,7 +13,9 @@ __version__ = '0.1.0'
 # This allows: from ANA_TOOLS import style_draw
 from .DRAW import style_draw, HistStyle, Brush
 from .STEERING_TOOLS import BelleAnalysisBase, ISRAnalysisTools
-#from .FIT.fit_tools import FIT_UTILS, QUICK_FIT
+from .OFFLINE_PROCESS import RDF_process
+from .PHY_CALCULATOR import PhysicsCalculator
+from .FIT.fit_tools import FIT_UTILS, QUICK_FIT
 
 # Define what gets imported with "from ANA_TOOLS import *"
 __all__ = [
@@ -21,8 +23,14 @@ __all__ = [
     'style_draw', 'HistStyle', 'Brush',
     
     # Analysis tools
-    'BelleAnalysisBase', 'ISRAnalysisTools'
+    'BelleAnalysisBase', 'ISRAnalysisTools',
     
     # Fitting tools
-    #'FIT_UTILS', 'QUICK_FIT'
+    'FIT_UTILS', 'QUICK_FIT',
+
+    # Offline processing
+    'RDF_process',
+
+    # Physics calculator
+    'PhysicsCalculator'
 ]

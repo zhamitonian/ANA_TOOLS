@@ -3,6 +3,10 @@ setup.py
 DRAW/AutoDraw.py
 DRAW/Ploter.py
 DRAW/__init__.py
+OFFLINE_PROCESS/RDataFrame_process.py
+OFFLINE_PROCESS/__init__.py
+PHY_CALCULATOR/Physical_Calculator.py
+PHY_CALCULATOR/__init__.py
 STEERING_TOOLS/BelleAnalysisBase.py
 STEERING_TOOLS/ISRAnalysis_utils.py
 STEERING_TOOLS/__init__.py

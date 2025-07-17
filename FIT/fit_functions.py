@@ -9,8 +9,8 @@ import time
 import math
 from contextlib import contextmanager
 from typing import Optional
-from offline.Draw.AutoDraw import style_draw
-from offline.Calculation.physics_calculator import PhysicsCalculator
+from DRAW import style_draw
+from PHY_CALCULATOR import PhysicsCalculator
 from .fit_tools import FIT_UTILS, QUICK_FIT
 
 from math import sqrt

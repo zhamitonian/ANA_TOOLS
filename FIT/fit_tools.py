@@ -5,8 +5,8 @@ import time
 import numpy as np
 import argparse
 from abc import ABC, abstractmethod
-from offline.Draw.AutoDraw import style_draw
-from offline.Calculation.physics_calculator import PhysicsCalculator
+from DRAW import style_draw
+from PHY_CALCULATOR import PhysicsCalculator
 
 import ROOT
 from ROOT import RooFit as rf
