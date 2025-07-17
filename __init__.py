@@ -13,7 +13,7 @@ __version__ = '0.1.0'
 # This allows: from ANA_TOOLS import style_draw
 from .DRAW import style_draw, HistStyle, Brush
 from .STEERING_TOOLS import BelleAnalysisBase, ISRAnalysisTools
-from .OFFLINE_PROCESS import RDF_process
+from .OFFLINE_PROCESS import RDF_process, gMC_topoana
 from .PHY_CALCULATOR import PhysicsCalculator
 from .FIT.fit_tools import FIT_UTILS, QUICK_FIT
 
@@ -29,7 +29,7 @@ __all__ = [
     'FIT_UTILS', 'QUICK_FIT',
 
     # Offline processing
-    'RDF_process',
+    'RDF_process', 'gMC_topoana',
 
     # Physics calculator
     'PhysicsCalculator'

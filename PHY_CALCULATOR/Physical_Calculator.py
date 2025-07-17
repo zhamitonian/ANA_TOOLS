@@ -106,7 +106,7 @@ class PhysicsCalculator:
         
         file.Close()
 
-    def calculateEfficiency(self, root_files: Dict[str, List[str]]) -> ROOT.TH1F:
+    def calculateEfficiency(self, root_files: Dict[str, List[str]], process_func:Optional[callable] = None) -> ROOT.TH1F:
         """
         Calculate and save efficiency histogram from truth and reconstruction histograms
         
@@ -135,18 +135,20 @@ class PhysicsCalculator:
         keys = list(root_files.keys())
         truth_key = keys[0]  # First key is assumed to be truth
         reco_key = keys[1]   # Second key is assumed to be reconstruction
+
+        df_truth = ROOT.RDataFrame(truth_key, root_files[truth_key][1])
+        df_reco = ROOT.RDataFrame(reco_key, root_files[reco_key][1])
         
+        if process_func is not None:
+            df_reco = process_func(df_reco)
         # Create histograms for both entries
-        hist_dict = {}
-        for tree, config in root_files.items():
-            df = ROOT.RDataFrame(tree, config[1])
-            h = df.Histo1D(self.hist_model, config[0])
-            hist_dict[tree] = h.GetValue()
-        
-        # Get truth and reconstruction histograms
-        truth_hist = hist_dict[truth_key]
-        reco_hist = hist_dict[reco_key]
-        
+        truth_hist = df_truth.Histo1D(self.hist_model, root_files[truth_key][0]).GetValue()
+        reco_hist = df_reco.Histo1D(self.hist_model, root_files[reco_key][0]).GetValue()
+
+        for i in range(1, truth_hist.GetNbinsX() + 1):
+            if reco_hist.GetBinContent(i) > truth_hist.GetBinContent(i):
+                print(f"Warning: Bin {i} has reco ({reco_hist.GetBinContent(i)}) > truth ({truth_hist.GetBinContent(i)})")
+
         # Calculate efficiency
         eff = ROOT.TEfficiency(reco_hist, truth_hist)
         eff.SetStatisticOption(ROOT.TEfficiency.kFCP)  # R.TEfficiency.kFCP

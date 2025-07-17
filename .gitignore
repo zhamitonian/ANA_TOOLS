@@ -1,0 +1,14 @@
+# Python packaging
+ana_tools.egg-info/
+PKG-INFO
+*.egg-info
+*.eggs
+*.so
+dist/
+build/
+SOURCES.txt
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class

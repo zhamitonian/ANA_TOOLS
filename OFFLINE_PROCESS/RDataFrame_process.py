@@ -41,8 +41,8 @@ class RDF_process:
         
         if kaon_vars is None:
             branch_names = ["E", "px", "py", "pz" ]
-            branch_names += ["E_CMS", "p_CMS", "px_CMS", "py_CMS" ]
-            branch_names += ['p' ,'theta','phi', 'nCDCHits', 'nPXDHits', 'nSVDHits', 'dr', 'dz']
+            #branch_names += ["E_CMS", "p_CMS", "px_CMS", "py_CMS" ]
+            #branch_names += ['p' ,'theta','phi', 'nCDCHits', 'nPXDHits', 'nSVDHits', 'dr', 'dz']
         else: 
             branch_names = kaon_vars
         
@@ -152,7 +152,7 @@ class RDF_process:
                     return std::vector<double>{E_cms, px_cms, py_cms, pz_cms, p_cms, pt_cms, theta_cms, phi_cms};
                 }
             """)
-            OFFLINE_PROCESS._defined_functions.add(func_name)
+            RDF_process._defined_functions.add(func_name)
         
 
         all_vars = ["E", "px", "py", "pz", "p", "pt", "theta", "phi"]
@@ -227,7 +227,7 @@ class RDF_process:
                     return std::vector<double>{M, p, pt, theta, phi};
                 }
             """)
-            OFFLINE_PROCESS._defined_functions.add(func_name)
+            RDF_process._defined_functions.add(func_name)
         
         # Define available variables and their indices in the returned vector
         all_vars = ["M", "p", "pt", "theta", "phi"]
@@ -532,7 +532,7 @@ class RDF_process:
         
         # Define the C++ function for vector calculation if not already defined
         func_name = "calculate_vector_dot_product"
-        if func_name not in OFFLINE_PROCESS._defined_functions:
+        if func_name not in RDF_process._defined_functions:
             ROOT.gInterpreter.Declare("""
                 double calculate_vector_dot_product(
                     double pt1_px, double pt1_py,
@@ -561,7 +561,7 @@ class RDF_process:
                     return phi;
                 }
             """)
-            OFFLINE_PROCESS._defined_functions.add(func_name)
+            RDF_process._defined_functions.add(func_name)
         
         p1, p2 = particle_pair
         
@@ -601,7 +601,7 @@ class RDF_process:
         
         # Define the C++ function for pt difference calculation if not already defined
         func_name = "calculate_pt_diff"
-        if func_name not in OFFLINE_PROCESS._defined_functions:
+        if func_name not in RDF_process._defined_functions:
             ROOT.gInterpreter.Declare("""
                 double calculate_pt_diff(
                     double pt1_px, double pt1_py,
@@ -618,7 +618,7 @@ class RDF_process:
                     return pt_diff.Mod();
                 }
             """)
-            OFFLINE_PROCESS._defined_functions.add(func_name)
+            RDF_process._defined_functions.add(func_name)
         
         p1, p2 = particle_pair
         
@@ -692,7 +692,7 @@ class RDF_process:
         
         # Create efficient C++ function for filtering
         func_name = "IsSelectedEntryOptimized"
-        if func_name not in OFFLINE_PROCESS._defined_functions:
+        if func_name not in RDF_process._defined_functions:
             # Create a sorted vector for binary search efficiency
             sorted_entries = sorted(best_entries)
             entries_str = "{" + ", ".join(map(str, sorted_entries)) + "}"
@@ -712,7 +712,7 @@ class RDF_process:
                     return std::binary_search(g_selected_entries.begin(), g_selected_entries.end(), entry);
                 }}
             """)
-            OFFLINE_PROCESS._defined_functions.add(func_name)
+            RDF_process._defined_functions.add(func_name)
         else:
             # Update the existing global vector with new entries using the update function
             sorted_entries = sorted(best_entries)
@@ -785,7 +785,7 @@ class RDF_process:
         weight_array = np.array(weights, dtype=np.float64)
 
         func_name = "get_bin_weight"
-        if func_name not in OFFLINE_PROCESS._defined_functions:
+        if func_name not in RDF_process._defined_functions:
             ROOT.gInterpreter.Declare(f"""
                 double get_bin_weight(double value, double xmin, double xmax, int nbins) {{
                     if (value < xmin || value >= xmax) return 1.0;
@@ -801,7 +801,7 @@ class RDF_process:
                     return 1.0;
                 }}
             """)
-            OFFLINE_PROCESS._defined_functions.add(func_name)
+            RDF_process._defined_functions.add(func_name)
         
         df_weighted = mc_df.Define("data_mc_weight", f"get_bin_weight({var}, {xmin}, {xmax}, {bin})")
         
@@ -855,7 +855,7 @@ class RDF_process:
                                         var2save=["E", "px", "py", "pz", "p", "pt", "theta", "phi"]) 
 
         func_name = "calculate_helicity_angles"
-        if func_name not in OFFLINE_PROCESS._defined_functions:
+        if func_name not in RDF_process._defined_functions:
             ROOT.gInterpreter.Declare("""
                 std::vector<double> calculate_helicity_angles(
                     double p1_cms_px , double p1_cms_py, double p1_cms_pz,
@@ -891,7 +891,7 @@ class RDF_process:
                     }
 
                 """)    
-            OFFLINE_PROCESS._defined_functions.add(func_name)
+            RDF_process._defined_functions.add(func_name)
 
         for i in range(0, 3):
             new_df = new_df.Define(f"helicity_angles{i}",
@@ -1076,7 +1076,7 @@ class RDF_process:
         
         # Define C++ helper functions for efficient processing
         func_name = "ProcessBestCandidates"
-        if func_name not in OFFLINE_PROCESS._defined_functions:
+        if func_name not in RDF_process._defined_functions:
             ROOT.gInterpreter.Declare("""
                 #include <unordered_map>
                 #include <vector>
@@ -1142,7 +1142,7 @@ class RDF_process:
                     return g_processor.GetUniqueEventCount();
                 }
             """)
-            OFFLINE_PROCESS._defined_functions.add(func_name)
+            RDF_process._defined_functions.add(func_name)
         
         # Reset the processor
         ROOT.ResetProcessor()
@@ -1160,7 +1160,7 @@ class RDF_process:
         
         # Create filter function
         filter_func_name = "IsSelectedEntryMemEff"
-        if filter_func_name not in OFFLINE_PROCESS._defined_functions:
+        if filter_func_name not in RDF_process._defined_functions:
             # Convert to set for O(1) lookup
             entries_set = set(best_entries)
             entries_str = "{" + ", ".join(map(str, sorted(entries_set))) + "}"
@@ -1173,7 +1173,7 @@ class RDF_process:
                     return selected_entries.find(entry) != selected_entries.end();
                 }}
             """)
-            OFFLINE_PROCESS._defined_functions.add(filter_func_name)
+            RDF_process._defined_functions.add(filter_func_name)
         
         # Apply filter
         result_df = df_with_key.Filter("IsSelectedEntryMemEff(__entry__)")
