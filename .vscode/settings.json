@@ -1,0 +1,5 @@
+{
+    "python.analysis.extraPaths": [
+        "/home/belle2/wangz/Work/ANA_TOOLS"
+    ]
+}
