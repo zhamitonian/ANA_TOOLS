@@ -116,7 +116,6 @@ class PhysicsCalculator:
             Dictionary with exactly two items: {"truth": [...], "reconstruction": [...]}
             Example: {"truth": ["mc_vpho_M", "path/to/file.root"], 
                       "ISRphiKK": ["M_phikk", "path/to/file.root"]}
-        
         Returns:
         --------
         ROOT.TH1F

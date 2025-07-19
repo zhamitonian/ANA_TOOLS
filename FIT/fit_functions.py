@@ -15,9 +15,7 @@ from .fit_tools import FIT_UTILS, QUICK_FIT
 
 from math import sqrt
 
-def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file=None, 
-                          bin_fit_range:Optional[str]=None,
-                          **kwargs):
+def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file=None, bin_fit_range:Optional[str]=None, **kwargs):
     """
     Perform sPlot analysis for digamma to diphi process
     
@@ -51,7 +49,7 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file=None,
         
         w = ROOT.RooWorkspace("w", "workspace")
         
-        dataset = tools.handle_dataset(tree, w, branches_name)
+        dataset = tools.handle_dataset(tree, w, branches_name, True)
 
         print(tree.GetEntries())
         print(f"Dataset created with {dataset.numEntries()} entries")

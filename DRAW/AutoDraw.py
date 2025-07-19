@@ -191,6 +191,9 @@ def style_draw(
     for i in range(num):
         if "RResultPtr" in str(type(hist_list[i])):
             hist_list[i] = hist_list[i].GetValue()  # Convert RResultPtr(from RDataFrame) to actual histogram
+        
+        #global_max = max(global_max, hist_list[i].GetMaximum())
+        #global_min = min(global_min, hist_list[i].GetMinimum())
 
         # Apply styling
         hist_list[i].SetLineColor(styles[i].line_color)
@@ -216,9 +219,9 @@ def style_draw(
         elif styles[i].draw_option == "HIST":
             hs_unstacked.Add(hist_list[i])
             has_unstacked = True
-        else:
-            has_special_draw = True
-        
+        #else:
+            #has_special_draw = True
+    
         # Calculate global Y range including error bars if applicable
         for bin in range(1, hist_list[i].GetNbinsX() + 1):
             bin_content = hist_list[i].GetBinContent(bin)
@@ -231,14 +234,17 @@ def style_draw(
             else:
                 global_min = min(global_min, bin_content)
                 global_max = max(global_max, bin_content)
-    
+
+    if has_stack: 
+        global_max = max( hs_stacked.GetStack().Last().GetMaximum() ,global_max)
+
     # Add some padding to the global range
     if global_min > 0 and not log_y:
         global_min = 0  # Start from 0 for linear scale if possible
     if log_y and global_min <= 0:
         global_min = 0.1  # Avoid 0 or negative values for log scale
     global_max *= 1.1  # Add 10% padding at the top
-    
+     
     # Use user-provided range if specified, otherwise use calculated global range
     final_min = y_min if use_user_y_range and y_max > y_min else global_min
     final_max = y_max if use_user_y_range and y_max > y_min else global_max
@@ -308,7 +314,8 @@ def style_draw(
     else:  # right (default)
         legend = ROOT.TLegend(0.73, 0.9 - 0.16 * num_stats - 0.05 * num, 0.93, 0.9 - 0.16 * num_stats)
     
-    legend.SetBorderSize(1)
+    legend.SetBorderSize(0)
+    legend.SetFillStyle(0)
     legend.SetFillColor(0)
     
     # Add legend entries if provided

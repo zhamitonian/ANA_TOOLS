@@ -63,7 +63,7 @@ class FIT_UTILS():
         os.close(log_fd)
 
 
-    def handle_dataset(self, tree:ROOT.TTree, workspace:ROOT.RooWorkspace, branches_name:Optional[List[str]] = None) -> ROOT.RooDataSet:
+    def handle_dataset(self, tree:ROOT.TTree, workspace:ROOT.RooWorkspace, branches_name:Optional[List[str]] = None, save_rootFile:bool = False) -> ROOT.RooDataSet:
         """
         Create corresponding RooRealVariable objects in the workspace , and create the RooDataSet
         and if branches_name are provided, create a combined dataset from the specified branches.
@@ -72,6 +72,9 @@ class FIT_UTILS():
             tree: ROOT TTree object
             workspace: RooWorkspace object
             branches_name: List of branch names to combine, e.g. ["phi1_M", "phi2_M"]
+            save_rootFile: bool, whether to save the combined dataset to a ROOT file , 
+                default is False, if True, the combined dataset will be saved to "combined.root",
+                when not save ROOT file, the quick strategy is used to create the dataset.
         
         Returns:
             ROOT.RooDataSet: Combined dataset
@@ -89,51 +92,70 @@ class FIT_UTILS():
             dataset = ROOT.RooDataSet("dataset", "dataset", tree, arg_set)
             return dataset
 
-        # Create empty dataset with the configured variables
-        dataset = ROOT.RooDataSet("dataset", "Combined dataset",arg_set)
-        fit_var = workspace.var(var_configs[0][0])  # The first variable is the one used for fitting
-        other_vars = [workspace.var(config[0]) for config in var_configs[1:]]
+        if not save_rootFile:
+            # Create empty dataset with the configured variables
+            dataset = ROOT.RooDataSet("dataset", "Combined dataset",arg_set)
+            fit_var = workspace.var(var_configs[0][0])  # The first variable is the one used for fitting
+            other_vars = [workspace.var(config[0]) for config in var_configs[1:]]
 
-        print(f"Combining branches: {branches_name}")
-        
-        # Iterate through each event in the tree
-        total_entries = 0
-        for i, event in enumerate(tree):
-            if i % 10000 == 0:
-                print(f"Processing event {i}...")
-                
-            # Get other variables' value from the event
-            other_values = [getattr(event, var_config[0]) for var_config in var_configs[1:]]
+            print(f"Combining branches: {branches_name}")
             
-            # For each specified branch, add its value as an entry to the dataset
-            for branch_name in branches_name:
-                try:
-                    # Get current branch value
-                    branch_value = getattr(event, branch_name)
+            # Iterate through each event in the tree
+            total_entries = 0
+            for i, event in enumerate(tree):
+                if i % 10000 == 0:
+                    print(f"Processing event {i}...")
                     
-                    # Check if value is within reasonable range
-                    if var_configs[0][1] <= branch_value <= var_configs[0][2]:
-                        # Set variable values
-                        fit_var.setVal(branch_value)
+                # Get other variables' value from the event
+                other_values = [getattr(event, var_config[0]) for var_config in var_configs[1:]]
+                
+                # For each specified branch, add its value as an entry to the dataset
+                for branch_name in branches_name:
+                    try:
+                        # Get current branch value
+                        branch_value = getattr(event, branch_name)
+                        
+                        # Check if value is within reasonable range
+                        if var_configs[0][1] <= branch_value <= var_configs[0][2]:
+                            # Set variable values
+                            fit_var.setVal(branch_value)
 
-                        for var, value in zip(other_vars, other_values):
-                            var.setVal(value)
-                        
-                        # Add to dataset
-                        dataset.add(arg_set)
-                        total_entries += 1
-                        
-                except AttributeError:
-                    print(f"Warning: Branch {branch_name} not found in event {i}")
-                    continue
-        
+                            for var, value in zip(other_vars, other_values):
+                                var.setVal(value)
+                            
+                            # Add to dataset
+                            dataset.add(arg_set)
+                            total_entries += 1
+                            
+                    except AttributeError:
+                        print(f"Warning: Branch {branch_name} not found in event {i}")
+                        continue
+        else:
+            df = ROOT.RDataFrame(tree)
+            temp_files = [f"temp_{i}.root" for i in range(len(branches_name))]
+            for i,branch_name in enumerate(branches_name):
+                filter_condition = f"{branch_name} >= {var_configs[0][1]} && {branch_name} <= {var_configs[0][2]}"
+                df.Filter(filter_condition).Redefine(f'{var_configs[0][0]}',f'{branch_name}').Snapshot("event", temp_files[i])
+
+            # Combine all filtered data using a TChain
+            df = ROOT.RDataFrame("event", temp_files)
+            df.Snapshot('event', 'combined.root')
+
+            file = ROOT.TFile("combined.root", "READ")
+            merged_tree = file.Get("event")
+
+            dataset = ROOT.RooDataSet("dataset", "dataset", merged_tree, arg_set)
+            total_entries = merged_tree.GetEntries()
+
+            # Clean up temporary files
+            for temp_file in temp_files:
+                os.remove(temp_file)
+
         print(f"Combined dataset created with {total_entries} entries")
         print(f"Original tree had {tree.GetEntries()} events")
         print(f"Combined {len(branches_name)} branches per event")
         
         return dataset
-
-
 
 class QUICK_FIT():
     """
@@ -146,6 +168,7 @@ class QUICK_FIT():
     - log_file: str, path to save the log output
     - range_use: tuple, (min, max) range for the fit
     - **kwargs: additional keyword arguments for flexibility
+    output to be: result, nsig, nsig_err
     """
 
     def __init__(self,

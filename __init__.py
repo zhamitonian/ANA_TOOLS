@@ -13,9 +13,9 @@ __version__ = '0.1.0'
 # This allows: from ANA_TOOLS import style_draw
 from .DRAW import style_draw, HistStyle, Brush
 from .STEERING_TOOLS import BelleAnalysisBase, ISRAnalysisTools
-from .OFFLINE_PROCESS import RDF_process, gMC_topoana
+from .OFFLINE_PROCESS import RDF_process, gMC_topoana, find_decay_indices
 from .PHY_CALCULATOR import PhysicsCalculator
-from .FIT.fit_tools import FIT_UTILS, QUICK_FIT
+from .FIT import FIT_UTILS, QUICK_FIT, perform_2dfit, perform_resonance_fit
 
 # Define what gets imported with "from ANA_TOOLS import *"
 __all__ = [
@@ -26,10 +26,10 @@ __all__ = [
     'BelleAnalysisBase', 'ISRAnalysisTools',
     
     # Fitting tools
-    'FIT_UTILS', 'QUICK_FIT',
+    'FIT_UTILS', 'QUICK_FIT', 'perform_2dfit', 'perform_resonance_fit',
 
     # Offline processing
-    'RDF_process', 'gMC_topoana',
+    'RDF_process', 'gMC_topoana', 'find_decay_indices',
 
     # Physics calculator
     'PhysicsCalculator'

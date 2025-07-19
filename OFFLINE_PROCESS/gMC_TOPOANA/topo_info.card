@@ -6,7 +6,7 @@
 # One file per line without tailing characters, such as comma, semicolon, and period. In addition, wildcards "[]?*" are supported in the item just like in the method Add() of the class TChain. Besides, both the absolute and relative paths are supported in the item.
 % Names of input root files
 {
-     /gpfs/group/belle2/users2022/wangz/data_gMC/tagged_ISRphiKK_MC/gMC_3Cfit_4S_hadron/only_4S/processed.root
+     /gpfs/group/belle2/users2022/wangz/data_gMC/tagged_ISRphiKK_MC/gMC_3Cfit_4S_hadron/only_4S/processed_temp.root
 }
 
 

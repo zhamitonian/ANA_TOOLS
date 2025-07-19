@@ -807,7 +807,7 @@ class RDF_process:
         
         return df_weighted
 
-    def calculate_HelicityAngle(self, df: ROOT.RDataFrame, particle_pair: Tuple[Tuple[str,str], Tuple[str,str]],other_particle:Optional[List[str]] = None) -> ROOT.RDataFrame:
+    def calculate_HelicityAngle(self, df: ROOT.RDataFrame, particle_pair: Tuple[str,str], inter_p:Optional[str], other_particle:Optional[List[str]] = None) -> ROOT.RDataFrame:
         """
         Calculate helicity angles according to the definition:
         1. In the rest frame of the intermediate particle, the angle between 
@@ -819,8 +819,10 @@ class RDF_process:
         -----------
         df : ROOT.RDataFrame
             Input dataframe
-        particle_pair : tuple[Tuple[str,str], Tuple[str,str]]
-            Name of the two particle pairs, e.g. (("phi1", "phi2"), ("Kstar", "antiKstar"))
+        particle_pair : Tuple[str,str]
+            Name of the two particle pairs, e.g. ("phikp", "phikm")
+        inter_p : str
+            Name of the intermediate particle, e.g. "Kstar"
         other_particle : Optional[List[str]]
             List of other final state particles, used for ee cms variables calculation
             
@@ -829,62 +831,41 @@ class RDF_process:
         ROOT.RDataFrame: Updated dataframe with helicity angles
         """
         # Correctly unpack the nested tuples
-        ((p11, p12), (p21, p22)) = particle_pair
-        inter_p1, inter_p2 = "A", "B" 
+        (p1, p2) = particle_pair
         new_df = df
 
         # Define intermediate particle 1 ,2 variables 
-        for comp in ["E", "px", "py", "pz"]:
-            new_df = new_df.Define(f"{inter_p1}_{comp}", f"{p11}_{comp} + {p12}_{comp}")
-            new_df = new_df.Define(f"{inter_p2}_{comp}", f"{p21}_{comp} + {p22}_{comp}")
+        if f"{inter_p}_E" not in new_df.GetColumnNames():
+            for comp in ["E", "px", "py", "pz"]:
+                new_df = new_df.Define(f"{inter_p}_{comp}", f"{p1}_{comp} + {p2}_{comp}")
 
         new_df = self.set_CMS_variables(new_df,
-                                        FSPs=[p11, p12, p21, p22] + (other_particle if other_particle else []),
-                                        particles=[p11, p12, p21, p22, inter_p1, inter_p2],
+                                        FSPs=[p1, p2] + (other_particle if other_particle else []),
+                                        particles=[p1, p2, inter_p],
                                         prefix="ee",
                                         var2save=["E", "px", "py", "pz", "p", "pt", "theta", "phi"])
         new_df = self.set_CMS_variables(new_df,
-                                        FSPs=[f"{inter_p1}"],
-                                        particles=[p11, p12],
-                                        prefix=inter_p1,
-                                        var2save=["E", "px", "py", "pz", "p", "pt", "theta", "phi"])
-        new_df = self.set_CMS_variables(new_df,
-                                        FSPs=[f"{inter_p2}"],
-                                        particles=[p21, p22],
-                                        prefix=inter_p2,
-                                        var2save=["E", "px", "py", "pz", "p", "pt", "theta", "phi"]) 
+                                        FSPs=[p1, p2],
+                                        particles=[p1, p2],
+                                        prefix=inter_p,
+                                        var2save=["px", "py", "pz"])
 
         func_name = "calculate_helicity_angles"
         if func_name not in RDF_process._defined_functions:
             ROOT.gInterpreter.Declare("""
-                std::vector<double> calculate_helicity_angles(
-                    double p1_cms_px , double p1_cms_py, double p1_cms_pz,
-                    double p2_cms_px , double p2_cms_py, double p2_cms_pz,
-                    double p11_p1_cms_px, double p11_p1_cms_py, double p11_p1_cms_pz,
-                    double p21_p2_cms_px, double p21_p2_cms_py, double p21_p2_cms_pz
+                double calculate_helicity_angles(
+                    double interp_ee_cms_px , double interp_ee_cms_py, double interp_ee_cms_pz,
+                    double p1_inter_p_cms_px, double p1_inter_p_cms_py, double p1_inter_p_cms_pz
                 ) {
-                    TVector3 inter1(p1_cms_px, p1_cms_py, p1_cms_pz);
-                    TVector3 inter2(p2_cms_px, p2_cms_py, p2_cms_pz);
-                    TVector3 p11(p11_p1_cms_px, p11_p1_cms_py, p11_p1_cms_pz);
-                    TVector3 p21(p21_p2_cms_px, p21_p2_cms_py, p21_p2_cms_pz);
+                    TVector3 inter_p( interp_ee_cms_px, interp_ee_cms_py, interp_ee_cms_pz);
+                    TVector3 p1( p1_inter_p_cms_px, p1_inter_p_cms_py, p1_inter_p_cms_pz);
                     
-                    inter1 = inter1.Unit();
-                    inter2 = inter2.Unit();
-                    p11 = p11.Unit();
-                    p21 = p21.Unit();
+                    inter_p = inter_p.Unit();
+                    p1 = p1.Unit();
 
-                    double cos_helicity_angle_1 = inter1.Dot(p11);
-                    double cos_helicity_angle_2 = inter2.Dot(p21);
-                    
-                    TVector3 plane1_cross = inter1.Cross(p11);
-                    TVector3 plane2_cross = inter2.Cross(p21);
+                    double cos_helicity_angle = inter_p.Dot(p1);
 
-                    plane1_cross = plane1_cross.Unit();
-                    plane2_cross = plane2_cross.Unit();                   
-
-                    double cos_helicity_angle_3 = plane1_cross.Dot(plane2_cross);
-
-                    std::vector<double> result = {cos_helicity_angle_1, cos_helicity_angle_2, cos_helicity_angle_3};
+                    double result = cos_helicity_angle;
                     
                     return result; 
                     
@@ -893,166 +874,12 @@ class RDF_process:
                 """)    
             RDF_process._defined_functions.add(func_name)
 
-        for i in range(0, 3):
-            new_df = new_df.Define(f"helicity_angles{i}",
-                                f"calculate_helicity_angles({inter_p1}_ee_cms_px,{inter_p1}_ee_cms_py,{inter_p1}_ee_cms_pz,"
-                                f"{inter_p2}_ee_cms_px,{inter_p2}_ee_cms_py,{inter_p2}_ee_cms_pz,"
-                                f"{p11}_{inter_p1}_cms_px,{p11}_{inter_p1}_cms_py,{p11}_{inter_p1}_cms_pz,"
-                                f"{p21}_{inter_p2}_cms_px,{p21}_{inter_p2}_cms_py,{p21}_{inter_p2}_cms_pz)[{i}]")
+        new_df = new_df.Define(f"cosHelicity_{inter_p}_{p1}",
+                            f"calculate_helicity_angles({inter_p}_ee_cms_px,{inter_p}_ee_cms_py,{inter_p}_ee_cms_pz,"
+                            f"{p1}_ee_cms_px,{p1}_ee_cms_py,{p1}_ee_cms_pz)")
         
         return new_df
 
-        
-        # Define the C++ function for helicity angle calculation
-        if not hasattr(self, 'helicity_func_defined'):
-            ROOT.gInterpreter.Declare("""
-                struct HelicityResult {
-                    double helicity_angle_1;      // Helicity angle for first intermediate particle
-                    double helicity_angle_2;      // Helicity angle for second intermediate particle
-                    double opening_angle;         // Opening angle between two intermediate particles
-                    double azimuthal_phi;         // Your original PHI calculation
-                    double decay_plane_angle;     // Angle between two decay planes in CMS frame
-                };
-                
-                HelicityResult calculate_helicity_angles(
-                    double inter1_px, double inter1_py, double inter1_pz, double inter1_E,
-                    double daughter1a_px, double daughter1a_py, double daughter1a_pz, double daughter1a_E,
-                    double daughter1b_px, double daughter1b_py, double daughter1b_pz, double daughter1b_E,
-                    double inter2_px, double inter2_py, double inter2_pz, double inter2_E,
-                    double daughter2a_px, double daughter2a_py, double daughter2a_pz, double daughter2a_E,
-                    double daughter2b_px, double daughter2b_py, double daughter2b_pz, double daughter2b_E
-                ) {
-                    HelicityResult result;
-                    
-                    // Create TLorentzVector for intermediate particles
-                    TLorentzVector inter1(inter1_px, inter1_py, inter1_pz, inter1_E);
-                    TLorentzVector inter2(inter2_px, inter2_py, inter2_pz, inter2_E);
-                    TLorentzVector daughter1a(daughter1a_px, daughter1a_py, daughter1a_pz, daughter1a_E);
-                    TLorentzVector daughter1b(daughter1b_px, daughter1b_py, daughter1b_pz, daughter1b_E);
-                    TLorentzVector daughter2a(daughter2a_px, daughter2a_py, daughter2a_pz, daughter2a_E);
-                    TLorentzVector daughter2b(daughter2b_px, daughter2b_py, daughter2b_pz, daughter2b_E);
-                    
-                    // Total system (CMS frame reference)
-                    TLorentzVector total_system = inter1 + inter2;
-                    TVector3 cms_boost = total_system.BoostVector();
-                    
-                    // Boost all particles to CMS frame
-                    TLorentzVector inter1_cms = inter1;
-                    TLorentzVector inter2_cms = inter2;
-                    TLorentzVector daughter1a_cms = daughter1a;
-                    TLorentzVector daughter1b_cms = daughter1b;
-                    TLorentzVector daughter2a_cms = daughter2a;
-                    TLorentzVector daughter2b_cms = daughter2b;
-                    
-                    inter1_cms.Boost(-cms_boost);
-                    inter2_cms.Boost(-cms_boost);
-                    daughter1a_cms.Boost(-cms_boost);
-                    daughter1b_cms.Boost(-cms_boost);
-                    daughter2a_cms.Boost(-cms_boost);
-                    daughter2b_cms.Boost(-cms_boost);
-                    
-                    // === Helicity angle for first intermediate particle ===
-                    // 1. Get intermediate particle direction in CMS frame
-                    TVector3 inter1_direction_cms = inter1_cms.Vect().Unit();
-                    
-                    // 2. Boost daughter to intermediate particle rest frame
-                    TVector3 boost1 = inter1.BoostVector();
-                    TLorentzVector daughter1a_rest = daughter1a;
-                    daughter1a_rest.Boost(-boost1);
-                    
-                    // 3. Get daughter direction in intermediate particle rest frame
-                    TVector3 daughter1a_direction_rest = daughter1a_rest.Vect().Unit();
-                    
-                    // 4. Calculate helicity angle (angle between these two directions)
-                    double cos_theta1 = inter1_direction_cms.Dot(daughter1a_direction_rest);
-                    result.helicity_angle_1 = acos(abs(cos_theta1));
-                    
-                    // === Helicity angle for second intermediate particle ===
-                    TVector3 inter2_direction_cms = inter2_cms.Vect().Unit();
-                    
-                    TVector3 boost2 = inter2.BoostVector();
-                    TLorentzVector daughter2a_rest = daughter2a;
-                    daughter2a_rest.Boost(-boost2);
-                    
-                    TVector3 daughter2a_direction_rest = daughter2a_rest.Vect().Unit();
-                    
-                    double cos_theta2 = inter2_direction_cms.Dot(daughter2a_direction_rest);
-                    result.helicity_angle_2 = acos(abs(cos_theta2));
-                    
-                    // === Angle between decay planes in CMS frame ===
-                    // Decay plane 1: defined by inter1 momentum and daughter1a momentum in CMS
-                    TVector3 inter1_vec_cms = inter1_cms.Vect();
-                    TVector3 daughter1a_vec_cms = daughter1a_cms.Vect();
-                    TVector3 normal1 = inter1_vec_cms.Cross(daughter1a_vec_cms);
-                    
-                    // Decay plane 2: defined by inter2 momentum and daughter2a momentum in CMS  
-                    TVector3 inter2_vec_cms = inter2_cms.Vect();
-                    TVector3 daughter2a_vec_cms = daughter2a_cms.Vect();
-                    TVector3 normal2 = inter2_vec_cms.Cross(daughter2a_vec_cms);
-
-                    // Angle between the two planes (angle between their normal vectors)
-                    if (normal1.Mag() > 0 && normal2.Mag() > 0) {
-                        double cos_plane_angle = normal1.Dot(normal2) / (normal1.Mag() * normal2.Mag());
-                        result.decay_plane_angle = acos(abs(cos_plane_angle));  // Take absolute value for [0, π/2]
-                    } else {
-                        result.decay_plane_angle = 0.0;  // Degenerate case
-                    }
-                    
-                    // === Additional useful angles ===
-                    // Opening angle between two intermediate particles
-                    result.opening_angle = inter1.Vect().Angle(inter2.Vect());
-                    
-                    // Azimuthal angle (your original PHI calculation)
-                    TVector2 pt1(inter1_px, inter1_py);
-                    TVector2 pt2(inter2_px, inter2_py);
-                    TVector2 x = pt1 + pt2;
-                    TVector2 y = (pt1 - pt2) * 0.5;
-                    
-                    if (x.Mod() > 0 && y.Mod() > 0) {
-                        double dot_product = x * y / (x.Mod() * y.Mod());
-                        double cross = x.X() * y.Y() - x.Y() * y.X();
-                        
-                        if(cross >= 0) {
-                            result.azimuthal_phi = acos(dot_product);
-                        } else {
-                            result.azimuthal_phi = 2*M_PI - acos(dot_product);
-                        }
-                    } else {
-                        result.azimuthal_phi = 0.0;
-                    }
-                    
-                    return result;
-                }
-            """)
-            self.helicity_func_defined = True
-        
-        p1, p2 = particle_pair
-        
-        # For diphi analysis: phi1 and phi2 are intermediate particles
-        # phi1kp, phi1km and phi2kp, phi2km are their daughters
-        new_df = new_df.Define(
-            f"helicity_result_{p1[0]}_{p2[0]}",
-            f"calculate_helicity_angles("
-            # First intermediate particle (phi1)
-            f"{p1[0]}_px, {p1[0]}_py, {p1[0]}_pz, {p1[0]}_E, "
-            # Daughters of phi1 (K+ and K-)
-            f"{p1[0]}kp_px, {p1[0]}kp_py, {p1[0]}kp_pz, {p1[0]}kp_E, "
-            f"{p1[0]}km_px, {p1[0]}km_py, {p1[0]}km_pz, {p1[0]}km_E, "
-            # Second intermediate particle (phi2)
-            f"{p2[0]}_px, {p2[0]}_py, {p2[0]}_pz, {p2[0]}_E, "
-            # Daughters of phi2 (K+ and K-)
-            f"{p2[0]}kp_px, {p2[0]}kp_py, {p2[0]}kp_pz, {p2[0]}kp_E, "
-            f"{p2[0]}km_px, {p2[0]}km_py, {p2[0]}km_pz, {p2[0]}km_E)"
-        )
-        
-        # Extract individual components
-        new_df = new_df.Define(f"helicity_angle_{p1[0]}", f"helicity_result_{p1[0]}_{p2[0]}.helicity_angle_1")
-        new_df = new_df.Define(f"helicity_angle_{p2[0]}", f"helicity_result_{p1[0]}_{p2[0]}.helicity_angle_2")
-        new_df = new_df.Define(f"decay_plane_angle", f"helicity_result_{p1[0]}_{p2[0]}.decay_plane_angle")
-        new_df = new_df.Define(f"opening_angle_{p1[0]}_{p2[0]}", f"helicity_result_{p1[0]}_{p2[0]}.opening_angle")
-        new_df = new_df.Define(f"PHI_{p1[0]}_{p2[0]}", f"helicity_result_{p1[0]}_{p2[0]}.azimuthal_phi")
-
-        return new_df
 
     def select_best_candidate_memory_efficient(self, input_df:ROOT.RDataFrame, var:str)->ROOT.RDataFrame:
         """
@@ -1181,48 +1008,7 @@ class RDF_process:
         
         return result_df
 
-    def put_lineshape(df_mc:ROOT.RDataFrame,df_truth:ROOT.RDataFrame,
-                      Func:Callable[[float], float]
-                     ):
-        """
-        df_truth : ROOT.RDataFrame - Input RDataFrame with MC truth , should provide a flat shape mc 
 
-        just for the ISRphiKK now.
-        """
-        random.seed()   
-
-        event_set = set()
-        selection_indices = []
-
-        ROOT.ROOT.EnableImplicitMT()  # Enable multi-threading for RDataFrame
-        num_threads = ROOT.ROOT.GetThreadPoolSize()
-        print(f"Using {num_threads} threads for processing...")
-
-        def get_selected_entries(entry, slot):
-            i = getattr(entry, "rdfentry_")
-            mass = getattr(entry, "mc_vpho_M")  # Make sure this column exists in df_truth
-            f_M = Func(mass)
-            dice = random.random()
-            
-            if f_M > dice:
-                # Store event identifier as a tuple
-                event_id = (getattr(entry, "__experiment__"), getattr(entry, "__run__"), getattr(entry, "__event__"))
-                
-                # Use a thread-safe approach to update shared collections
-                with ROOT.std.mutex():  # This assumes ROOT provides a mutex for thread safety
-                    event_set.add(event_id)
-                    selection_indices.append(i)
-                    
-                # Optional: Print only every Nth event or for debugging
-                if i % 1000 == 0:
-                    print(f"Entry: {i} M_vpho: {mass} Func(M_vpho): {f_M} dice: {dice}")
-
-        df_truth.ForeachSlot(get_selected_entries)
-
-        def is_selected(exp, run, evt):
-            return (exp, run, evt) in event_set
-
-        df_mc = df_mc.Filter(is_selected, ["__experiment__", "__run__", "__event__"])
 
          
 

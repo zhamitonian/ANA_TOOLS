@@ -5,7 +5,9 @@ import re
 from typing import Optional, List , Tuple
 import subprocess
 
-def find_decay_indices(file_path:str, search_mediate:str, search_final:str) -> List[int]:
+def find_decay_indices(file_path:str, search_final:str, search_mediate:Optional[str] = None) -> List[int]:
+    if search_mediate is None:
+        search_mediate = search_final
     with open(file_path, 'r') as file:
         paragraphs = file.read().split('\n\n')
     indexes = []
@@ -33,7 +35,9 @@ def gMC_topoana(input_rootFile:str, tree_name:str, channel_to_filter:Optional[Li
     output_prefix = os.path.join(input_dir, "topoana")
 
     # Update the topo_info.card with the input file and output path
-    with open("topo_info.card", "r") as f:
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    topo_card_path = os.path.join(script_dir, "topo_info.card")
+    with open(topo_card_path, "r") as f:
         lines = f.readlines()
     # The input file path is on line 9 (index 8)
     # The output file path(only need prefix) is on line 16 (index 15)
@@ -56,12 +60,13 @@ def gMC_topoana(input_rootFile:str, tree_name:str, channel_to_filter:Optional[Li
     if channel_to_filter is not None:
         decay_indexes = []
         for mediate_state, final_state in channel_to_filter:
-            decay_indexes += find_decay_indices(f"{output_prefix}.txt", mediate_state, final_state)
+            decay_indexes += find_decay_indices(f"{output_prefix}.txt", final_state,  mediate_state)
             print(decay_indexes)
         cut_string = " "
         for index in decay_indexes:
             cut_string += f'&& (iDcyTr != {index}) '
-            cut_string = cut_string[2:]  # Remove leading '&& '
+        cut_string = cut_string[3:]  # Remove leading '&& '
+        print(f"Cut string: {cut_string}")
 
         df = ROOT.RDataFrame(tree_name, f"{output_prefix}.root")
         df = df.Filter(cut_string, "Filter by decay indices")
@@ -75,7 +80,7 @@ def gMC_topoana(input_rootFile:str, tree_name:str, channel_to_filter:Optional[Li
 
         
 # Example usage:
-#gMC_topoana("/gpfs/group/belle2/users2022/wangz/data_gMC/tagged_ISRphiKK_MC/gMC_3Cfit_4S_hadron/only_4S/processed.root","event",  [( " phi --> K+ K- " , " e+ e- ---> K+ K+ K- K- ")])
+#gMC_topoana("/gpfs/group/belle2/users2022/wangz/data_gMC/tagged_ISRphiKK_MC/gMC_3Cfit_4S_hadron/only_4S/processed_temp.root","event",  [( " phi --> K+ K- " , " e+ e- ---> K+ K+ K- K- ")])
 #gMC_topoana("/gpfs/group/belle2/users2022/wangz/data_gMC/tagged_ISRphiKK_MC/gMC_3Cfit_4S_hadron/only_4S/processed.root","event")
 
 
