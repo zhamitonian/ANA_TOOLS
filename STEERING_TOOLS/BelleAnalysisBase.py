@@ -339,6 +339,46 @@ class BelleAnalysisBase:
             'proton': proton_vars,
             'vertex': ["chiProb","Chi2"]
             }
+    
+    def save_variables_before_fitting_general(self,decay_chain,path):
+        """
+        Save variables before fitting for later comparison
+        
+        Args:
+            path: Analysis path to add modules to
+        
+        Returns:
+            List of before-fit variable aliases
+        """
+        #MCParticleInfo = BelleAnalysisBase.MCParticleInfo
+
+        particles = self.parse_decay_chain(decay_chain)
+
+        firstP = particles[0]
+
+        # Build event kinematics
+        ma.buildEventKinematics(inputListNames=firstP.list_name , path=path)
+        
+        # Create dictionary of variables to save
+        var_dict = {}
+
+        for p in particles:
+            var_dict.update({
+                firstP.get_daughter_access_string(p,f"{var}"):f"{p.prefix}_bf_{var}"
+                for var in ["E","theta","px","py","pz"]
+            })
+
+        # Save system variables
+        #var_dict.update({firstP.get_daughter_access_string(vpho,f"{var}"): f"sys_{var}" for var in vc.recoil_kinematics + ["m2Recoil"]})
+        var_dict.update({var: f"sys_{var}" for var in ["visibleEnergyOfEventCMS"]} ) 
+
+        # Save variables to extra info
+        ma.variablesToExtraInfo(firstP.list_name, variables=var_dict, path=path)
+        
+        # Create aliases for before-fit variables
+        bf_fit_vars = vu.create_aliases(list(var_dict.values()), 'extraInfo({variable})', '')
+        
+        return bf_fit_vars
 
 
     @staticmethod

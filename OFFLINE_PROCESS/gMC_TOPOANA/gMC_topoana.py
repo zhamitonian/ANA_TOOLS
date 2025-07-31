@@ -5,7 +5,7 @@ import re
 from typing import Optional, List , Tuple
 import subprocess
 
-def find_decay_indices(file_path:str, search_final:str, search_mediate:Optional[str] = None) -> List[int]:
+def find_decay_indices(file_path:str, search_final:str, search_mediate:Optional[str] = None, exclude_mediate:Optional[str] = None) -> List[int]:
     if search_mediate is None:
         search_mediate = search_final
     with open(file_path, 'r') as file:
@@ -13,8 +13,15 @@ def find_decay_indices(file_path:str, search_final:str, search_mediate:Optional[
     indexes = []
     for paragraph in paragraphs:
         lines = paragraph.split('\n')
-        if search_final.strip() in lines[-1] and any(search_mediate.strip() in line for line in lines):
-            indexes.append(re.split(r':\s*|\s+', lines[0])[3])
+        if search_final.strip() in lines[-1]:
+            if exclude_mediate and any(exclude_mediate.strip() in line for line in lines):
+                continue
+            if search_mediate and not any(search_mediate.strip() in line for line in lines):
+                continue
+            match = re.search(r'iDcyTr:\s*(\d+)', lines[0])
+            if match :
+                index = match.group(1) 
+                indexes.append(index)
     return indexes
 
 def gMC_topoana(input_rootFile:str, tree_name:str, channel_to_filter:Optional[List[Tuple[str, str]]]= None )-> str:

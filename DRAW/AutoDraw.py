@@ -384,7 +384,7 @@ def graph_draw(
     
     if marker_size is None:
         marker_size = [1.0, 1.0, 2.0]
-    
+       
     ROOT.gStyle.SetLabelSize(0.04,"xyz")
     ROOT.gStyle.SetPadTopMargin(.1)
     ROOT.gStyle.SetPadLeftMargin(.14)
@@ -401,22 +401,18 @@ def graph_draw(
     ROOT.gStyle.SetPadTickX(1)
     ROOT.gStyle.SetPadTickY(1)
     ROOT.gStyle.SetPadGridX(1)
-    ROOT.gStyle.SetPadGridY(1)
-    
+    ROOT.gStyle.SetPadGridY(1) 
+
     c = ROOT.TCanvas("c", "", 1600, 1080)
     
     num = len(graph_list)
     for i in range(num):
-        graph_list[i].GetYaxis().SetLabelSize(0.05)
-        graph_list[i].GetXaxis().SetLabelSize(0.05)
-        graph_list[i].GetXaxis().SetTitleFont(22)
-        graph_list[i].GetYaxis().SetTitleFont(22)
+        graph_list[i].GetXaxis().SetTitle(graph_list[0].GetXaxis().GetTitle())
+        graph_list[i].GetYaxis().SetTitle(graph_list[0].GetYaxis().GetTitle())
         graph_list[i].GetXaxis().CenterTitle()
         graph_list[i].GetYaxis().CenterTitle()
         graph_list[i].GetXaxis().SetTitleOffset(1.2)
         graph_list[i].GetYaxis().SetTitleOffset(1.2)
-        graph_list[i].GetXaxis().SetTitleSize(0.04)
-        graph_list[i].GetYaxis().SetTitleSize(0.04)
         
         graph_list[i].SetMarkerStyle(marker_style[i] if i < len(marker_style) else 20)
         graph_list[i].SetLineWidth(line_width[i] if i < len(line_width) else 1)
@@ -440,10 +436,11 @@ def graph_draw(
         for i in range(min(num, len(leg_texts))):
             legend.AddEntry(graph_list[i], leg_texts[i], "PEL")
         
-        legend.SetFillColor(10)
-        legend.SetTextFont(22)
+        legend.SetBorderSize(0)
+        legend.SetFillStyle(0)
+        legend.SetFillColor(0) 
         legend.Draw()
-    
+
     c.Update()
     c.Print(output_name)
 

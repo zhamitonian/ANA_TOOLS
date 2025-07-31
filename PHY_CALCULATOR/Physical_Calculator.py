@@ -106,16 +106,18 @@ class PhysicsCalculator:
         
         file.Close()
 
-    def calculateEfficiency(self, root_files: Dict[str, List[str]], process_func:Optional[callable] = None) -> ROOT.TH1F:
+    def calculateEfficiency(self, rootFile_config: Dict[str, Tuple[str, str]], 
+                            process_func:Optional[callable] = None, 
+                            truth_varDefine:Optional[callable] = None) -> ROOT.TH1F:
         """
         Calculate and save efficiency histogram from truth and reconstruction histograms
         
         Parameters:
         -----------
-        root_files : Dict[str, List[str]]
-            Dictionary with exactly two items: {"truth": [...], "reconstruction": [...]}
-            Example: {"truth": ["mc_vpho_M", "path/to/file.root"], 
-                      "ISRphiKK": ["M_phikk", "path/to/file.root"]}
+        rootFile_config: Dict["tree name": ("branch name", "path/to/file.root")]
+            Dictionary with exactly two items: {"truth": (...), "reconstruction": (...)}
+            Example: {"truth": ("mc_vpho_M", "path/to/file.root"), 
+                      "ISRphiKK": ("M_phikk", "path/to/file.root")}
         Returns:
         --------
         ROOT.TH1F
@@ -127,22 +129,25 @@ class PhysicsCalculator:
             If root_files doesn't contain exactly two items
         """
         # Ensure there are exactly two items
-        if len(root_files) != 2:
-            raise ValueError(f"root_files must contain exactly 2 items, but got {len(root_files)}")
+        if len( rootFile_config) != 2:
+            raise ValueError(f"root_files must contain exactly 2 items, but got {len(rootFile_config)}")
         
         # Extract the two keys (in a stable order)
-        keys = list(root_files.keys())
+        keys = list(rootFile_config.keys())
         truth_key = keys[0]  # First key is assumed to be truth
         reco_key = keys[1]   # Second key is assumed to be reconstruction
 
-        df_truth = ROOT.RDataFrame(truth_key, root_files[truth_key][1])
-        df_reco = ROOT.RDataFrame(reco_key, root_files[reco_key][1])
+        df_truth = ROOT.RDataFrame(truth_key, rootFile_config[truth_key][1])
+        df_reco = ROOT.RDataFrame(reco_key, rootFile_config[reco_key][1])
         
         if process_func is not None:
             df_reco = process_func(df_reco)
+        if truth_varDefine is not None:
+            df_truth = truth_varDefine(df_truth) 
+
         # Create histograms for both entries
-        truth_hist = df_truth.Histo1D(self.hist_model, root_files[truth_key][0]).GetValue()
-        reco_hist = df_reco.Histo1D(self.hist_model, root_files[reco_key][0]).GetValue()
+        truth_hist = df_truth.Histo1D(self.hist_model, rootFile_config[truth_key][0]).GetValue()
+        reco_hist = df_reco.Histo1D(self.hist_model, rootFile_config[reco_key][0]).GetValue()
 
         for i in range(1, truth_hist.GetNbinsX() + 1):
             if reco_hist.GetBinContent(i) > truth_hist.GetBinContent(i):
@@ -162,55 +167,30 @@ class PhysicsCalculator:
         
         return h_efficiency
 
-    def divide_hist(self, root_files: Dict[str, List[str]]) -> ROOT.TH1F:
+    def divide_hist(self, h_numerator: ROOT.TH1, h_denominator: ROOT.TH1, name: str = "divided") -> ROOT.TH1:
         """
-        Calculate and save efficiency histogram from truth and reconstruction histograms
-        
+        Divide two histograms bin-by-bin and return the result.
+
         Parameters:
         -----------
-        root_files : Dict[str, List[str]]
-            Dictionary with exactly two items: {"truth": [...], "reconstruction": [...]}
-            Example: {"truth": ["mc_vpho_M", "path/to/file.root"], 
-                      "ISRphiKK": ["M_phikk", "path/to/file.root"]}
-        
+        h_numerator : ROOT.TH1
+            Numerator histogram
+        h_denominator : ROOT.TH1
+            Denominator histogram
+        name : str
+            Name for the output histogram
+
         Returns:
         --------
-        ROOT.TH1F
-            Efficiency histogram (reconstruction/truth)
-        
-        Raises:
-        -------
-        ValueError
-            If root_files doesn't contain exactly two items
+        ROOT.TH1
+            Resulting histogram after division
         """
-        # Ensure there are exactly two items
-        if len(root_files) != 2:
-            raise ValueError(f"root_files must contain exactly 2 items, but got {len(root_files)}")
-        
-        # Extract the two keys (in a stable order)
-        keys = list(root_files.keys())
-        truth_key = keys[0]  # First key is assumed to be truth
-        reco_key = keys[1]   # Second key is assumed to be reconstruction
-        
-        # Create histograms for both entries
-        hist_dict = {}
-        for tree, config in root_files.items():
-            df = ROOT.RDataFrame(tree, config[1])
-            h = df.Histo1D(self.hist_model, config[0])
-            hist_dict[tree] = h.GetValue()
-        
-        # Get truth and reconstruction histograms
-        truth_hist = hist_dict[truth_key]
-        reco_hist = hist_dict[reco_key]
-        
-        # Calculate efficiency
-        h_efficiency = reco_hist.Clone("effi")
-        h_efficiency.Sumw2()
-        h_efficiency.Divide(reco_hist, truth_hist, 1, 1, "B")
-        h_efficiency.GetYaxis().SetTitle("#varepsilon")
-        h_efficiency.GetXaxis().SetTitle("#sqrt{s'} [GeV]")
-        
-        return h_efficiency
+        h_result = h_numerator.Clone(name)
+        h_result.Sumw2()
+        h_result.Divide(h_numerator, h_denominator, 1, 1, "B")
+        h_result.GetYaxis().SetTitle("Ratio")
+        h_result.GetXaxis().SetTitle(h_denominator.GetXaxis().GetTitle())
+        return h_result
     
     def getNsigHist(self, nsig_txt: str) -> Optional[ROOT.TH1F]:
         """
@@ -295,83 +275,6 @@ class PhysicsCalculator:
         
         return h_lum
     
-
-    def calculate_false_accept_rate(self, root_files: Dict[str, List[str]],nsig_txt:Optional[str] = None) -> List[ROOT.TH1D]:
-        """
-        Calculate false accept rate from three histograms using the order of items in the dictionary.
-        
-        The first item is considered the truth histogram,
-        the second item is the first reconstruction histogram , false reconstruction efficiency,
-        the third item is the second reconstruction histogram.
-        
-        Parameters:
-        -----------
-        root_files : Dict[str, List[str]]
-            Dictionary with three items in specific order: 
-            {truth: [...], first_reco: [...], second_reco: [...]}
-            Example: {"truth": ["mc_vpho_M", "path/to/file.root"], 
-                     "ISRphiKK": ["M_phikk", "path/to/file.root"],
-                     "ISRphiKK_alt": ["M_phikk_alt", "path/to/file.root"]}
-        nsig_path : Optional[str]
-            Path for nsig txt
-        
-        Returns:
-        --------
-            ROOT.TH1F
-        if nsig_path is not None:
-            Nsubtract histogram (false accept rate * nsig)
-        else:
-            False accept rate histogram (first_efficiency / second_efficiency)
-        
-        Raises:
-        -------
-        ValueError
-            If root_files doesn't contain exactly three items
-        """
-        # Ensure there are exactly three items
-        if len(root_files) != 3:
-            raise ValueError(f"root_files must contain exactly 3 items, but got {len(root_files)}")
-        
-        # Extract the keys in order
-        keys = list(root_files.keys())
-        truth_key = keys[0]      # First key is truth
-        first_reco_key = keys[1] # Second key is first reconstruction
-        second_reco_key = keys[2] # Third key is second reconstruction
-        
-        # Calculate first efficiency using existing method
-        first_efficiency_input = {
-            truth_key: root_files[truth_key],
-            first_reco_key: root_files[first_reco_key]
-        }
-        h_first_eff = self.calculateEfficiency(first_efficiency_input)
-        h_first_eff.SetTitle("false_accept_efficiency")
-        
-        # Calculate second efficiency using existing method
-        second_efficiency_input = {
-            truth_key: root_files[truth_key],
-            second_reco_key: root_files[second_reco_key]
-        }
-        h_second_eff = self.calculateEfficiency(second_efficiency_input)
-        h_second_eff.SetTitle("reconstruct_efficiency")
-
-        self.saveHist(h_first_eff)
-        self.saveHist(h_second_eff)
-        
-        # Calculate false accept rate
-        h_false_accept = h_first_eff.Clone("false_accept_rate")
-        h_false_accept.Divide(h_first_eff, h_second_eff, 1, 1, "B")
-        h_false_accept.GetYaxis().SetTitle("False Accept Rate")
-        h_false_accept.GetXaxis().SetTitle("#sqrt{s'} [GeV]")
-
-        if nsig_txt is not None:
-            h_nsig = self.getNsigHist(nsig_txt)
-            h_subract = h_nsig.Clone("subtract")
-            h_subract.Multiply(h_false_accept)
-            return [h_subract,h_first_eff,h_second_eff]
-
-        else: 
-            return [h_false_accept,h_first_eff,h_second_eff]
-
 
     def calculate_cross_section(self, 
                                 h_nsig: ROOT.TH1,

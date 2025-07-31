@@ -56,16 +56,16 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file=None, bin_fi
         
         # Use Breit-Wigner (RooBreitWigner) with PDG values for phi meson
         w.factory(f"BreitWigner::reso_bw({reso}_M, {mass}, {width})")
-        w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.0008, 5e-04, 0.005])")
+        w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.0008, 5e-05, 0.001])")
         w.factory(f"FCONV::sig_pdf({reso}_M, reso_bw, smear)")
         
         # Polynomial , Chebychev 
         bkg_func = "Chebychev"  
-        #bkg_func = "Polynomial"  
+        bkg_func = "Polynomial"  
         w.factory(f"{bkg_func}::bkg_pdf({reso}_M, {{b_0[-10, 10], b_1[-10, 10], b_2[-10, 10], b_3[-10, 10]}})")
         #w.factory(f"{bkg_func}::bkg_pdf({reso}_M, {{b_0[-10, 10], b_1[-10, 10], b_2[-10, 10]}})")
         #w.factory(f"{bkg_func}::bkg_pdf({reso}_M, {{b_0[-10, 10], b_1[-10, 10]}})")
-        #W.factory(f"{bkg_func}::bkg_pdf({reso}_M, {{b_0[-10, 10]}})")
+        #w.factory(f"{bkg_func}::bkg_pdf({reso}_M, {{b_0[-10, 10]}})")
         
         w.factory("SUM::model(nsig[20000, 0, 40000] * sig_pdf, nbkg[45000, 0, 200000] * bkg_pdf)")
 
@@ -602,5 +602,3 @@ def perform_2dfit(tree:ROOT.TTree, output_dir:dir, log_file = None, bin_fit_rang
                 
     return result, nsig, nsig_err
 
-quick_fit = QUICK_FIT(fit_function= perform_2dfit, bin_var_config=("PHI_phi1_phi2", 0, math.pi*2, 12))
-quick_fit.parse_arguments()
