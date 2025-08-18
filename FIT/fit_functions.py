@@ -9,6 +9,7 @@ import time
 import math
 from contextlib import contextmanager
 from typing import Optional
+from array import array
 from DRAW import style_draw
 from PHY_CALCULATOR import PhysicsCalculator
 from .fit_tools import FIT_UTILS, QUICK_FIT
@@ -343,8 +344,9 @@ def perform_2dfit(tree:ROOT.TTree, output_dir:dir, log_file = None, bin_fit_rang
         #w.factory(f"{bkg_func}::reso2_bkg_pdf({reso2}_M, {{b2_0[-10, 10], b2_1[-10, 10], b2_2[-10, 10], b2_3[-10, 10]}})")
         #w.factory(f"{bkg_func}::reso1_bkg_pdf({reso1}_M, {{b1_0[-10, 10], b1_1[-10, 10], b1_2[-10, 10]}})")
         #w.factory(f"{bkg_func}::reso2_bkg_pdf({reso2}_M, {{b2_0[-10, 10], b2_1[-10, 10], b2_2[-10, 10]}})")
-        #w.factory(f"{bkg_func}::reso1_bkg_pdf({reso1}_M, {{b1_0[-10, 10], b1_1[-10, 10]}})")
-        #w.factory(f"{bkg_func}::reso2_bkg_pdf({reso2}_M, {{b2_0[-10, 10], b2_1[-10, 10]}})")
+        #w.factory(f"{bkg_func}::reso1_bkg_pdf({reso1}_M, {{b1_0[-10, 10]}})")
+        #w.factory(f"{bkg_func}::reso2_bkg_pdf({reso2}_M, {{b2_0[-10, 10]}})")
+        
         w.factory(f"{bkg_func}::reso1_bkg_pdf({reso1}_M, {{b1_0[-10, 10]}})")
         w.factory(f"{bkg_func}::reso2_bkg_pdf({reso2}_M, {{b2_0[-10, 10]}})")
         
@@ -602,3 +604,99 @@ def perform_2dfit(tree:ROOT.TTree, output_dir:dir, log_file = None, bin_fit_rang
                 
     return result, nsig, nsig_err
 
+def get_effCurve(h_eff: ROOT.TH1, plot_path: str) -> ROOT.TH1:
+    """
+    Fits a polynomial to an efficiency histogram and returns a histogram with the fit results.
+    Also plots the efficiency histogram with the fitted curve if plot_path is provided.
+    
+    Args:
+        h_eff: ROOT TH1 histogram containing efficiency data
+        plot_path: Optional file path to save the efficiency plot
+    
+    Returns:
+        ROOT.TH1: Histogram with same binning as input, containing fit values and errors
+    """
+    h_eff_update = h_eff.Clone("h_eff_fit")
+    # Create a polynomial fit function (5th order polynomial)
+    fit_func = ROOT.TF1("eff_fit_func", "pol5", h_eff.GetXaxis().GetXmin(), h_eff.GetXaxis().GetXmax())
+    
+    # Fit the histogram
+    fit_result = h_eff.Fit(fit_func, "SQR")  # S to return fit result, Q for quiet, R for range
+
+    # Plot the efficiency histogram and fit curve if plot_path is provided
+    def plot_efficiency():
+        # Apply styling for the plot
+        ROOT.gStyle.SetOptStat(0)
+        ROOT.gStyle.SetOptFit(0)
+        
+        # Create canvas
+        c = ROOT.TCanvas("c_eff", "Efficiency", 1600, 1080)
+        c.SetLeftMargin(0.15)
+        c.SetBottomMargin(0.14)
+        c.SetRightMargin(0.05)
+        c.SetTopMargin(0.1)
+        c.SetGridx(True)
+        c.SetGridy(True)
+        
+        # Draw histogram
+        h_eff.SetMarkerStyle(20)
+        h_eff.SetMarkerColor(ROOT.kBlack)
+        h_eff.SetLineColor(ROOT.kBlack)
+        h_eff.SetTitle("")
+        h_eff.GetXaxis().SetTitleSize(0.045)
+        h_eff.GetYaxis().SetTitleSize(0.045)
+        h_eff.GetXaxis().SetLabelSize(0.04)
+        h_eff.GetYaxis().SetLabelSize(0.04)
+        h_eff.GetYaxis().SetTitle("Efficiency")
+        h_eff.SetMinimum(0)
+        h_eff.Draw("PE")
+        
+        # Draw fit function
+        fit_func.SetLineColor(ROOT.kRed)
+        fit_func.SetLineWidth(3)
+        fit_func.Draw("SAME")
+        
+        # Create legend
+        legend = ROOT.TLegend(0.7, 0.5, 0.9, 0.6)
+        legend.SetBorderSize(1)
+        legend.SetFillStyle(0)
+        legend.AddEntry(h_eff, "Efficiency data", "PE")
+        legend.AddEntry(fit_func, "Polynomial fit", "L")
+        legend.Draw()
+        
+        # Add chi-square information
+        chi2 = fit_func.GetChisquare()
+        ndf = fit_func.GetNDF()
+        chi2_label = ROOT.TLatex(0.7, 0.45, f"#chi^{{2}}/ndf = {chi2:.1f}/{ndf}")
+        chi2_label.SetNDC()
+        chi2_label.SetTextSize(0.035)
+        chi2_label.Draw()
+    
+        # Use ROOT's TVirtualFitter to get accurate confidence intervals
+        n_points = 100
+        error_band = ROOT.TGraphErrors(n_points)
+        for i in range(n_points):
+            x = h_eff.GetXaxis().GetXmin() + i * (h_eff.GetXaxis().GetXmax() - h_eff.GetXaxis().GetXmin()) / (n_points - 1)
+            error_band.SetPoint(i, x, 0)  # y value will be overwritten by GetConfidenceIntervals
+            
+        # Use ROOT's TVirtualFitter to calculate confidence intervals (as in C++ examples)
+        fitter = ROOT.TVirtualFitter.GetFitter()
+        fitter.GetConfidenceIntervals(error_band, 0.683)  # 68.3% confidence level (1σ)
+        fitter.GetConfidenceIntervals(h_eff_update, 0.683)  # 68.3% confidence level (1σ)
+        
+        error_band.SetFillColor(ROOT.kRed-9)
+        error_band.SetFillStyle(3001)
+        error_band.Draw("3 SAME")
+        
+        # Update legend with error band
+        legend.AddEntry(error_band, "1 #sigma error band", "f")
+        legend.Draw()
+
+        c.SaveAs(plot_path)
+    
+    plot_efficiency()
+    return h_eff_update
+
+
+    
+    

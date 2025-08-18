@@ -15,7 +15,7 @@ from .DRAW import style_draw, HistStyle, graph_draw, Brush
 from .STEERING_TOOLS import BelleAnalysisBase, ISRAnalysisTools
 from .OFFLINE_PROCESS import RDF_process, gMC_topoana, find_decay_indices
 from .PHY_CALCULATOR import PhysicsCalculator
-from .FIT import FIT_UTILS, QUICK_FIT, perform_2dfit, perform_resonance_fit
+from .FIT import FIT_UTILS, QUICK_FIT, perform_2dfit, perform_resonance_fit, get_effCurve
 
 # Define what gets imported with "from ANA_TOOLS import *"
 __all__ = [
@@ -26,7 +26,7 @@ __all__ = [
     'BelleAnalysisBase', 'ISRAnalysisTools',
     
     # Fitting tools
-    'FIT_UTILS', 'QUICK_FIT', 'perform_2dfit', 'perform_resonance_fit',
+    'FIT_UTILS', 'QUICK_FIT', 'perform_2dfit', 'perform_resonance_fit', 'get_effCurve',
 
     # Offline processing
     'RDF_process', 'gMC_topoana', 'find_decay_indices',

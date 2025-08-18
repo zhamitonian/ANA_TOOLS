@@ -152,7 +152,7 @@ class PhysicsCalculator:
         for i in range(1, truth_hist.GetNbinsX() + 1):
             if reco_hist.GetBinContent(i) > truth_hist.GetBinContent(i):
                 print(f"Warning: Bin {i} has reco ({reco_hist.GetBinContent(i)}) > truth ({truth_hist.GetBinContent(i)})")
-
+        #return truth_hist
         # Calculate efficiency
         eff = ROOT.TEfficiency(reco_hist, truth_hist)
         eff.SetStatisticOption(ROOT.TEfficiency.kFCP)  # R.TEfficiency.kFCP
@@ -164,9 +164,10 @@ class PhysicsCalculator:
 
         h_efficiency.GetYaxis().SetTitle("#varepsilon")
         h_efficiency.GetXaxis().SetTitle("#sqrt{s'} [GeV]")
-        
-        return h_efficiency
 
+        return h_efficiency
+        
+        
     def divide_hist(self, h_numerator: ROOT.TH1, h_denominator: ROOT.TH1, name: str = "divided") -> ROOT.TH1:
         """
         Divide two histograms bin-by-bin and return the result.
