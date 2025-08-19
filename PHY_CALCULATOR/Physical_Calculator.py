@@ -38,10 +38,8 @@ class PhysicsCalculator:
         bin_num : Optional[List[int]]
             List of number of bins for each region between boundaries
         """
-        if bin_width is None and bin_num is None:
-            raise ValueError("Either bin_width or bin_num must be provided.")
-        if bin_width is not None and bin_num is not None:
-            raise ValueError("Only one of bin_width or bin_num can be provided.")
+        if (bin_width is None and bin_num is None) or (bin_width is not None and bin_num is not None):
+            raise ValueError("Specify exactly one of bin_width or bin_num.")
         
         self.bin_boundaries = bin_boundaries
 
@@ -52,17 +50,14 @@ class PhysicsCalculator:
         else:
             self.nbins = bin_num
         self.nbin_tot = int(sum(self.nbins))
-        print(self.nbins)
+        print("bin num: ", self.nbins, "\nbin width: ", self.bin_width, "\nbin boundary:", self.bin_boundaries)
         
         # Create array of bin edges
         bins = []
-        for i in range(len(bin_boundaries) - 1):
-            bins.extend(np.linspace(bin_boundaries[i], bin_boundaries[i + 1], 
-                                   int(self.nbins[i]), endpoint=False))
+        for i, n in enumerate(self.nbins):
+            bins.extend(np.linspace(bin_boundaries[i], bin_boundaries[i + 1], n, endpoint=False))
         bins.append(bin_boundaries[-1])
-        for i in range(len(bins)):
-            bins[i] = round(bins[i], 4)
-        self.bins = np.array(bins)
+        self.bins = np.round(bins, 4)
 
         self.hist_model = ROOT.RDF.TH1DModel("hist", "", self.nbin_tot, self.bins)
 

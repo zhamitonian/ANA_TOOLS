@@ -50,7 +50,7 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file=None, bin_fi
         
         w = ROOT.RooWorkspace("w", "workspace")
         
-        dataset = tools.handle_dataset(tree, w, branches_name, True)
+        dataset = tools.handle_dataset(tree, w, branches_name, False)
 
         print(tree.GetEntries())
         print(f"Dataset created with {dataset.numEntries()} entries")
