@@ -49,6 +49,8 @@ class PhysicsCalculator:
                          for i in range(len(bin_width))]
         else:
             self.nbins = bin_num
+            self.bin_width = [(bin_boundaries[i + 1] - bin_boundaries[i]) / bin_num[i]
+                         for i in range(len(bin_num))]
         self.nbin_tot = int(sum(self.nbins))
         print("bin num: ", self.nbins, "\nbin width: ", self.bin_width, "\nbin boundary:", self.bin_boundaries)
         
