@@ -16,7 +16,7 @@ from .fit_tools import FIT_UTILS, QUICK_FIT
 
 from math import sqrt
 
-def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file=None, bin_fit_range:Optional[str]=None, **kwargs):
+def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str]=None, bin_fit_range:Optional[str]=None, joint_fit:bool=False, **kwargs):
     """
     Perform sPlot analysis for digamma to diphi process
     
@@ -51,6 +51,8 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file=None, bin_fi
         w = ROOT.RooWorkspace("w", "workspace")
         
         dataset = tools.handle_dataset(tree, w, branches_name, False)
+        # Save dataset to workspace
+        w.Import(dataset, ROOT.RooFit.Rename("dataset"))
 
         print(tree.GetEntries())
         print(f"Dataset created with {dataset.numEntries()} entries")
@@ -79,13 +81,15 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file=None, bin_fi
         if not model:
             print("Error: model is None")
             return
-    
 
         print(f"Dataset entries: {dataset.numEntries()}")
         if dataset.numEntries() == 0:
             print("Error: dataset is empty")
             return
         
+        if joint_fit:
+            return w 
+
         result = model.fitTo(dataset, 
                              rf.Save(True), 
                              rf.NumCPU(4), 
@@ -129,8 +133,8 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file=None, bin_fi
         ROOT.gStyle.SetTitleSize(0.04,"xyz")
         ROOT.gStyle.SetOptTitle(0)
         ROOT.gStyle.SetMarkerSize(0.5)
-        ROOT.gStyle.SetLabelFont(42,"XYZ")
-        ROOT.gStyle.SetTitleFont(42,"XYZ")
+        ROOT.gStyle.SetLabelFont(12,"XYZ")
+        ROOT.gStyle.SetTitleFont(12,"XYZ")
         ROOT.gStyle.SetCanvasDefH(1080)
         ROOT.gStyle.SetCanvasDefW(1600)
         ROOT.gStyle.SetCanvasColor(ROOT.kWhite)
@@ -163,7 +167,7 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file=None, bin_fi
             model.plotOn(framex, rf.Components("bkg_pdf"), rf.Name("bkg"), rf.LineColor(ROOT.kGreen+2), rf.LineStyle(7), rf.LineWidth(3))
 
             framex.SetTitle("")
-            framex.GetXaxis().SetTitle("#phi Mass (GeV/c^{2}")
+            #framex.GetXaxis().SetTitle("#phi Mass (GeV/c^{2}")
             framex.GetYaxis().SetTitle(f"Candidates / ({((x_max - x_min) / nbin * 1000):.3f} MeV/c^{{2}})")
             framex.GetYaxis().SetTitleOffset(1)
             
@@ -263,6 +267,12 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file=None, bin_fi
         print(f"Signal yield: {nsig:.2f} ± {nsig_err:.2f}")
         print(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"========================")
+
+        # Print the names of PDFs and coefficients in the model
+        pdf_names = [model.pdfList().at(i).GetName() for i in range(model.pdfList().getSize())]
+        coef_names = [model.coefList().at(i).GetName() for i in range(model.coefList().getSize())]
+        print("PDFs in model:", pdf_names)
+        print("Coefficients in model:", coef_names)
                 
     return result, nsig, nsig_err
 
@@ -438,8 +448,8 @@ def perform_2dfit(tree:ROOT.TTree, output_dir:dir, log_file = None, bin_fit_rang
         ROOT.gStyle.SetTitleSize(0.04,"xyz")
         ROOT.gStyle.SetOptTitle(0)
         ROOT.gStyle.SetMarkerSize(0.5)
-        ROOT.gStyle.SetLabelFont(42,"XYZ")
-        ROOT.gStyle.SetTitleFont(42,"XYZ")
+        ROOT.gStyle.SetLabelFont(12,"XYZ")
+        ROOT.gStyle.SetTitleFont(12,"XYZ")
         ROOT.gStyle.SetCanvasDefH(1080)
         ROOT.gStyle.SetCanvasDefW(1600)
         ROOT.gStyle.SetCanvasColor(ROOT.kWhite)
@@ -604,6 +614,303 @@ def perform_2dfit(tree:ROOT.TTree, output_dir:dir, log_file = None, bin_fit_rang
                 
     return result, nsig, nsig_err
 
+def perform_chisq_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str]=None, bin_fit_range:Optional[str]=None, joint_fit:bool=False, **kwargs):
+    """
+    Perform chi-squared fit using signal MC template (unbinned fit)
+    
+    Args:
+        tree: Input ROOT TTree with the data
+        output_dir: Output directory for plots and results
+        log_file: Optional file to save logs (stdout and stderr)
+        bin_fit_range: Optional string representing the bin range for fitting
+        **kwargs: Additional keyword arguments:
+            sMC_path: signal MC path which contain data for template
+            chisq_var: Name of chi-squared variable (default: "chisq")
+            chisq_range: Tuple for chi-squared range (default: (0, 50))
+            chisq_bins: Number of bins for chi-squared histogram (default: 50)
+            unbinned: Boolean flag for unbinned fit (default: True)
+    """
+    # Get additional parameters from kwargs
+    sMC_path = kwargs.get('sMC_path', None)
+    sMC_file = ROOT.TFile(sMC_path) if sMC_path else None
+    sMC_tree = sMC_file.Get("event") if sMC_file else None
+    
+    chisq_var = kwargs.get('chisq_var', 'chisq')
+    chisq_range = kwargs.get('chisq_range', (0, 40))
+    chisq_bins = kwargs.get('chisq_bins', 80)
+    unbinned = kwargs.get('unbinned', True)
+
+    var_config = [(chisq_var, chisq_range[0], chisq_range[1]), ("vpho_M", 2, 3)]  
+    tools = FIT_UTILS(log_file=log_file, var_config=var_config)
+
+    print(kwargs)
+    branches_name = kwargs.get('branches_name', None)
+    print(f"Branch names {branches_name}")
+
+    # redirect log
+    with tools.redirect_output():
+        print(f"=== Starting Chi-squared Template Fit (Unbinned) ===")
+        print(f"Output file: {output_dir}")
+        if branches_name:
+            print(f"Branch names to combine: {branches_name}")
+        if sMC_tree:
+            print(f"Using signal MC template for chi-squared: {chisq_var}")
+        print(f"Unbinned fit: {unbinned}")
+        print(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"===============================")
+        
+        w = ROOT.RooWorkspace("w", "workspace")
+        
+        # Handle data dataset
+        dataset = tools.handle_dataset(tree, w, branches_name, False)
+        w.Import(dataset, ROOT.RooFit.Rename("dataset"))
+
+        print(f"Data tree entries: {tree.GetEntries()}")
+        print(f"Dataset created with {dataset.numEntries()} entries")
+        
+        # Create signal MC template for chi-squared if provided
+        chisq_template_pdf = None
+        if sMC_tree and unbinned:
+            print(f"Creating unbinned chi-squared template from signal MC...")
+            
+            # Create signal MC dataset for unbinned template
+            mc_dataset = tools.handle_dataset(sMC_tree, w, branches_name, False)
+            w.Import(mc_dataset, ROOT.RooFit.Rename("mc_dataset"))
+            
+            # For unbinned fit, use RooKeysPdf (kernel density estimation)
+            # This creates a smooth PDF from the MC data points
+            w.factory(f"RooKeysPdf::sig_pdf({chisq_var}, mc_dataset, RooKeysPdf::MirrorBoth, 2.0)")
+            chisq_template_pdf = w.pdf("sig_pdf")
+            
+            print(f"Signal MC unbinned template created with {mc_dataset.numEntries()} entries")
+            
+        elif sMC_tree and not unbinned:
+            print(f"Creating binned chi-squared template from signal MC...")
+            
+            # Create signal MC dataset
+            mc_dataset = tools.handle_dataset(sMC_tree, w, branches_name, False)
+            w.Import(mc_dataset, ROOT.RooFit.Rename("mc_dataset"))
+            
+            # Create histogram template from signal MC chi-squared distribution
+            chisq_hist = mc_dataset.createHistogram("h_chisq_template", 
+                                                   w.var(chisq_var), 
+                                                   ROOT.RooFit.Binning(chisq_bins))
+            
+            # Convert histogram to RooDataHist and then to RooHistPdf
+            chisq_datahist = ROOT.RooDataHist("chisq_dataHist", 
+                                            "Chi-squared template from MC", 
+                                            ROOT.RooArgList(w.var(chisq_var)), 
+                                            chisq_hist)
+            w.Import(chisq_datahist)
+            
+            # Create template PDF
+            w.factory(f"RooHistPdf::sig_pdf({chisq_var}, chisq_dataHist)")
+            chisq_template_pdf = w.pdf("sig_pdf")
+
+            print(f"Signal MC binned template created with {mc_dataset.numEntries()} entries")
+
+        # Alternative unbinned approaches if no MC is provided
+        if not chisq_template_pdf:
+            print("Warning: No signal MC provided, using analytical PDF")
+            if unbinned:
+                # Use analytical functions for unbinned fit
+                # Gamma distribution often works well for chi-squared-like variables
+                w.factory(f"Gamma::sig_pdf({chisq_var}, gamma_shape[2, 0.5, 10], gamma_rate[0.5, 0.1, 2], 0)")
+            else:
+                # Use chi-squared distribution
+                w.factory(f"RooChiSquarePdf::sig_pdf({chisq_var}, ndof[5, 1, 20])")
+        
+        # Background chi-squared PDF (typically exponential)
+        w.factory(f"Exponential::bkg_pdf({chisq_var}, exp_slope[-0.1, -1, 0])")
+        
+        # Total model
+        w.factory("SUM::model(nsig[20000, 0, 40000] * sig_pdf, nbkg[45000, 0, 200000] * bkg_pdf)")
+
+        # Perform fit
+        model = w.pdf("model")
+        if not dataset or not model:
+            print("Error: dataset or model is None")
+            return
+
+        print(f"Dataset entries: {dataset.numEntries()}")
+        if dataset.numEntries() == 0:
+            print("Error: dataset is empty")
+            return
+        
+        if joint_fit:
+            return w 
+
+        # Unbinned maximum likelihood fit
+        result = model.fitTo(dataset, 
+                             rf.Save(True), 
+                             rf.NumCPU(4), 
+                             rf.PrintLevel(1),  # Slightly more verbose for unbinned
+                             rf.Strategy(2),    # More robust strategy for unbinned
+                             rf.Extended(True)) # Extended likelihood for yield determination
+
+        # --------------------------------------- splot ---------------------------------------
+
+        # Create sPlot
+        sData = RooStats.SPlot("sData", "sPlot", dataset, model,
+                               ROOT.RooArgList(w.var("nsig"), w.var("nbkg")))
+
+        # Print results
+        print(f"Signal yield: {w.var('nsig').getVal()} ± {w.var('nsig').getError()}")
+        print(f"Background yield: {w.var('nbkg').getVal()} ± {w.var('nbkg').getError()}")
+        
+        # Create sWeighted datasets
+        sWeighted_data = ROOT.RooDataSet("sWeighted_data", "Data with sWeights", 
+                                        dataset, dataset.get(), "", "nsig_sw")
+        bkg_weighted_data = ROOT.RooDataSet("bkg_weighted_data", "Data with background sWeights", 
+                                          dataset, dataset.get(), "", "nbkg_sw")
+        
+        # Save results
+        out_file = ROOT.TFile(output_dir + "splot_output.root", "RECREATE")
+        sWeighted_data.Write("signal_weighted_data")
+        bkg_weighted_data.Write("background_weighted_data")
+        if sMC_tree:
+            if unbinned:
+                # For unbinned, create a histogram for visualization
+                mc_hist = ROOT.RooDataSet("mc_dataset", "", ROOT.RooArgList(w.var(chisq_var))).createHistogram(
+                    "h_chisq_template", w.var(chisq_var), ROOT.RooFit.Binning(chisq_bins))
+                mc_hist.Write("h_chisq_template_unbinned")
+            else:
+                chisq_hist.Write("h_chisq_template")
+        out_file.Close()
+        
+        #----------------------------- plot distribution  ------------------------
+        ROOT.gStyle.SetLabelSize(0.04,"xyz")
+        ROOT.gStyle.SetPadTopMargin(.1)
+        ROOT.gStyle.SetPadLeftMargin(.14)
+        ROOT.gStyle.SetPadRightMargin(.07)
+        ROOT.gStyle.SetPadBottomMargin(.14)
+        ROOT.gStyle.SetTitleSize(0.04,"xyz")
+        ROOT.gStyle.SetOptTitle(0)
+        ROOT.gStyle.SetMarkerSize(0.5)
+        ROOT.gStyle.SetLabelFont(12,"XYZ")
+        ROOT.gStyle.SetTitleFont(12,"XYZ")
+        ROOT.gStyle.SetCanvasDefH(1080)
+        ROOT.gStyle.SetCanvasDefW(1600)
+        ROOT.gStyle.SetCanvasColor(ROOT.kWhite)
+        ROOT.gStyle.SetPadTickX(1)
+        ROOT.gStyle.SetPadTickY(1)
+        ROOT.gStyle.SetPadGridX(1)
+        ROOT.gStyle.SetPadGridY(1)
+
+        def plot():
+            # Create plot for chi-squared variable
+            canvas = ROOT.TCanvas("c_chisq", "Chi-squared unbinned fit", 1600, 1080)
+            canvas.Divide(1, 2)
+            pad1 = canvas.cd(1)
+            pad1.SetPad(0, 0.3, 1, 1)
+            pad1.SetBottomMargin(0.01)
+            pad1.SetLeftMargin(0.15)
+            pad1.SetRightMargin(0.05)
+            pad1.Draw()
+
+            frame_chisq = w.var(chisq_var).frame()
+            
+            # For unbinned fit, use adaptive binning or fixed binning for visualization
+            dataset.plotOn(frame_chisq, rf.Name("data"), rf.MarkerColor(ROOT.kBlack), rf.MarkerStyle(20), rf.Binning(chisq_bins))
+            model.plotOn(frame_chisq, rf.Name("total"), rf.LineColor(4), rf.Normalization(1.0, ROOT.RooAbsReal.RelativeExpected))
+            model.plotOn(frame_chisq, rf.Components("sig_pdf"), rf.Name("signal"), rf.LineColor(2), rf.LineStyle(4), rf.LineWidth(3), rf.Normalization(1.0, ROOT.RooAbsReal.RelativeExpected))
+            model.plotOn(frame_chisq, rf.Components("bkg_pdf"), rf.Name("bkg"), rf.LineColor(ROOT.kGreen+2), rf.LineStyle(7), rf.LineWidth(3), rf.Normalization(1.0, ROOT.RooAbsReal.RelativeExpected))
+
+            frame_chisq.SetTitle("")
+            frame_chisq.GetXaxis().SetTitle("#chi^{2}")
+            frame_chisq.GetYaxis().SetTitle("Candidates")
+            frame_chisq.Draw()
+            
+            leg = ROOT.TLegend(0.75, 0.9 - 0.05*5, 0.95, 0.9)
+            leg.SetBorderSize(0)
+            leg.SetFillStyle(0)
+
+            # Create legend entries
+            data_entry = ROOT.TMarker(0, 0, 20)
+            data_entry.SetMarkerColor(ROOT.kBlack)
+            data_entry.SetMarkerStyle(20)   
+
+            model_entry = ROOT.TLine()
+            model_entry.SetLineColor(4)
+
+            signal_entry = ROOT.TLine()
+            signal_entry.SetLineColor(2)
+
+            background_entry = ROOT.TLine()
+            background_entry.SetLineColor(ROOT.kGreen+2)
+            background_entry.SetLineStyle(7)
+            background_entry.SetLineWidth(3)
+
+            leg.AddEntry(data_entry, "Data", "pe")
+            leg.AddEntry(model_entry, "Total fit", "l")
+            leg.AddEntry(signal_entry, "Signal", "l")
+            leg.AddEntry(background_entry, "Background", "l")
+            leg.SetTextFont(12)
+
+            # Calculate chi-square for visualization (note: less meaningful for unbinned fits)
+            if not unbinned:
+                chi2 = frame_chisq.chiSquare("total", "data")
+                data_hist = frame_chisq.getHist("data")
+                nBins = data_hist.GetN()
+                nPars = result.floatParsFinal().getSize()
+                ndf = nBins - nPars
+                chi2_val = chi2 * ndf
+                leg.AddEntry(0, "#chi^{2}/ndf = " + f"{chi2_val:.1f}/{ndf}", "")
+            else:
+                # For unbinned fits, show the negative log likelihood
+                nll = result.minNll()
+                leg.AddEntry(0, f"-log L = {nll:.1f}", "")
+            
+            leg.AddEntry(0, "N_{sig}=" + f"{w.var('nsig').getVal():.1f} #pm {w.var('nsig').getError():.1f}", "")
+            leg.AddEntry(0, f"Unbinned fit: {unbinned}", "")
+            if bin_fit_range:
+                leg.AddEntry(0, f"Bin: {bin_fit_range}", "")
+            leg.Draw()
+
+            pad2 = canvas.cd(2)
+            pad2.SetPad(0, 0, 1, 0.3)
+            pad2.SetTopMargin(0.01)
+            pad2.SetBottomMargin(0.3)
+            pad2.SetLeftMargin(0.15)
+            pad2.SetRightMargin(0.05)
+            pad2.Draw()
+
+            frame_chisq_pull = w.var(chisq_var).frame()
+            frame_chisq_pull.SetTitle("")
+            frame_chisq_pull.GetYaxis().SetTitle("Pull")
+            frame_chisq_pull.GetYaxis().SetTitleOffset(0.35)
+            frame_chisq_pull.GetYaxis().SetTitleSize(0.1)
+            frame_chisq_pull.GetYaxis().CenterTitle()
+            frame_chisq_pull.GetYaxis().SetRangeUser(-5, 5)
+            frame_chisq_pull.GetYaxis().SetLabelSize(0.1)
+            frame_chisq_pull.GetXaxis().SetLabelSize(0.13)
+            frame_chisq_pull.GetXaxis().SetTitle("#chi^{2}")
+            frame_chisq_pull.GetXaxis().CenterTitle()
+            frame_chisq_pull.GetXaxis().SetTitleSize(0.12)
+            frame_chisq_pull.GetXaxis().SetTitleOffset(1.1)
+
+            pullhist = frame_chisq.pullHist("data", "total")
+            frame_chisq_pull.addObject(pullhist, "P")
+            frame_chisq_pull.Draw()
+            canvas.SaveAs(output_dir + f"_chisq.png")
+
+        plot()
+
+        nsig = w.var("nsig").getVal()
+        nsig_err = w.var("nsig").getError()
+                
+        print(f"=== Analysis Complete ===")
+        print(f"Signal yield: {nsig:.2f} ± {nsig_err:.2f}")
+        print(f"Fit method: {'Unbinned' if unbinned else 'Binned'} maximum likelihood")
+        if chisq_template_pdf:
+            print(f"Chi-squared template method used")
+        print(f"Minimum NLL: {result.minNll():.2f}")
+        print(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"========================")
+                
+    return result, nsig, nsig_err
+
+
 def get_effCurve(h_eff: ROOT.TH1, plot_path: str) -> ROOT.TH1:
     """
     Fits a polynomial to an efficiency histogram and returns a histogram with the fit results.
@@ -698,5 +1005,4 @@ def get_effCurve(h_eff: ROOT.TH1, plot_path: str) -> ROOT.TH1:
     return h_eff_update
 
 
-    
-    
+

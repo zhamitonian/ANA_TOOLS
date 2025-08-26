@@ -63,7 +63,9 @@ class FIT_UTILS():
         os.close(log_fd)
 
 
-    def handle_dataset(self, tree:ROOT.TTree, workspace:ROOT.RooWorkspace, branches_name:Optional[List[str]] = None, save_rootFile:bool = False) -> ROOT.RooDataSet:
+    def handle_dataset(self, tree:ROOT.TTree, workspace:ROOT.RooWorkspace, 
+                       branches_name:Optional[List[str]] = None, 
+                       save_rootFile:bool = False) -> ROOT.RooDataSet:
         """
         Create corresponding RooRealVariable objects in the workspace , and create the RooDataSet
         and if branches_name are provided, create a combined dataset from the specified branches.
@@ -361,3 +363,258 @@ class QUICK_FIT():
             h_nsig.GetXaxis().SetTitle("#phi")
         style_draw([h_nsig], args.output_dir + "nsig.png")
         '''
+
+    def perform_joint_fit(self, 
+                     workspace1: ROOT.RooWorkspace, 
+                     workspace2: ROOT.RooWorkspace,
+                     joint_params: List[str] = ["nsig"],
+                     output_file: str = "", 
+                     log_file: str = "") -> Tuple[ROOT.RooFitResult, float, float]:
+        """
+        Perform joint fitting using RooSimultaneous with shared parameters
+    
+        Args:
+            workspace1: First workspace containing model and dataset
+            workspace2: Second workspace containing model and dataset
+            joint_params: List of parameter names to share between models
+            output_file: Path to save fit results
+            log_file: Path to save log output
+    
+        Returns:
+            Tuple of (fit_result, nsig, nsig_error)
+        """
+    
+        # Create a new workspace for joint fitting
+        joint_workspace = ROOT.RooWorkspace("joint_ws", "Joint fitting workspace")
+    
+        print(f"=== Starting Joint Fit ===")
+        print(f"Shared parameters: {joint_params}")
+    
+        # Step 1: Import everything from both workspaces with renaming
+        print("Importing models and datasets...")
+    
+        # Import from workspace1 with suffix "_var1"
+        dataset1 = workspace1.data("dataset")
+        model1 = workspace1.pdf("model")
+        joint_workspace.import_(dataset1, ROOT.RooFit.RenameAllNodes("_var1"))
+        joint_workspace.import_(model1, ROOT.RooFit.RenameAllNodes("_var1"))
+    
+        # Import from workspace2 with suffix "_var2"  
+        dataset2 = workspace2.data("dataset")
+        model2 = workspace2.pdf("model")
+        joint_workspace.import_(dataset2, ROOT.RooFit.RenameAllNodes("_var2"))
+        joint_workspace.import_(model2, ROOT.RooFit.RenameAllNodes("_var2"))
+    
+        print(f"Dataset 1 entries: {dataset1.numEntries()}")
+        print(f"Dataset 2 entries: {dataset2.numEntries()}")
+    
+        # Step 2: Create shared parameters and rebuild models
+        self._create_shared_parameters(joint_workspace, workspace1, workspace2, joint_params)
+    
+        # Step 3: Create category variable for RooSimultaneous
+        joint_workspace.factory("category[var1,var2]")
+        category = joint_workspace.cat("category")
+    
+        # Step 4: Create RooSimultaneous model
+        sim_model = ROOT.RooSimultaneous("sim_model", "Simultaneous model", category)
+    
+        # Add the modified models to simultaneous PDF
+        model1_modified = joint_workspace.pdf("model_var1_shared")
+        model2_modified = joint_workspace.pdf("model_var2_shared")
+    
+        if not model1_modified:
+            model1_modified = joint_workspace.pdf("model_var1")
+        if not model2_modified:
+            model2_modified = joint_workspace.pdf("model_var2")
+    
+        sim_model.addPdf(model1_modified, "var1")
+        sim_model.addPdf(model2_modified, "var2")
+        joint_workspace.import_(sim_model)
+    
+        # Step 5: Create combined dataset with category information
+        combined_dataset = ROOT.RooDataSet("joint dataset", "joint dataset",
+                                           Index()) 
+        self._create_simultaneous_dataset(
+            joint_workspace, "dataset_var1", "dataset_var2", category
+        )
+        joint_workspace.import_(combined_dataset)
+    
+        # Step 6: Perform simultaneous fit
+        fit_utils = FIT_UTILS(log_file=log_file, var_config=[])
+    
+        with fit_utils.redirect_output():
+            print("Performing simultaneous fit...")
+        
+            sim_model = joint_workspace.pdf("sim_model")
+            combined_data = joint_workspace.data("combined_dataset")
+        
+            joint_result = sim_model.fitTo(combined_data,
+                                     ROOT.RooFit.Save(),
+                                     ROOT.RooFit.Extended(True),
+                                     ROOT.RooFit.PrintLevel(0),
+                                     ROOT.RooFit.NumCPU(4))
+        
+            # Extract shared signal yield
+            nsig_joint, nsig_err_joint = self._extract_shared_signal_yield(joint_workspace, joint_params)
+        
+            print(f"Joint fit signal yield: {nsig_joint:.2f} ± {nsig_err_joint:.2f}")
+    
+        # Save results if output file specified
+        if output_file:
+            joint_workspace.writeToFile(output_file + "_joint_workspace.root")
+        
+            result_file = ROOT.TFile(output_file + "_joint_fitresult.root", "RECREATE")
+            joint_result.Write()
+            result_file.Close()
+        
+            print(f"Joint fit results saved to {output_file}_joint_*.root")
+    
+        print(f"=== Joint Fit Complete ===")
+    
+        return joint_result, nsig_joint, nsig_err_joint
+
+    def _create_shared_parameters(self, joint_workspace: ROOT.RooWorkspace, 
+                            workspace1: ROOT.RooWorkspace, workspace2: ROOT.RooWorkspace,
+                            joint_params: List[str]):
+        """
+        Create shared parameters and rebuild models to use them
+        """
+        print(f"Creating shared parameters: {joint_params}")
+    
+        for param_name in joint_params:
+            param1 = workspace1.var(param_name)
+            param2 = workspace2.var(param_name)
+        
+            if param1 and param2:
+                # Create shared parameter with average initial value
+                param_val = (param1.getVal() + param2.getVal()) / 2
+                param_min = min(param1.getMin(), param2.getMin())
+                param_max = max(param1.getMax(), param2.getMax())
+            
+                shared_param_name = f"{param_name}_shared"
+                joint_workspace.factory(f"{shared_param_name}[{param_val}, {param_min}, {param_max}]")
+            
+                print(f"Created shared parameter: {shared_param_name} = {param_val}")
+            
+                # Rebuild models to use shared parameter
+                self._rebuild_model_with_shared_param(joint_workspace, "model_var1", param_name, shared_param_name)
+                self._rebuild_model_with_shared_param(joint_workspace, "model_var2", param_name, shared_param_name)
+
+    def _rebuild_model_with_shared_param(self, workspace: ROOT.RooWorkspace, 
+                                   model_name: str, old_param_name: str, new_param_name: str):
+        """
+        Rebuild model to use shared parameter
+        """
+        model = workspace.pdf(model_name)
+        if not model:
+            print(f"Warning: Model {model_name} not found")
+            return
+    
+        # Get the original model components
+        if hasattr(model, 'coefList') and hasattr(model, 'pdfList'):
+            # This is a RooAddPdf (SUM model)
+            pdf_list = model.pdfList()
+            coef_list = model.coefList()
+        
+            # Create new coefficient list with shared parameter
+            new_coef_list = ROOT.RooArgList()
+            coef_iter = coef_list.createIterator()
+            coef = coef_iter.Next()
+            while coef:
+                if coef.GetName() == f"{old_param_name}_var1" or coef.GetName() == f"{old_param_name}_var2":
+                    # Replace with shared parameter
+                    shared_param = workspace.var(new_param_name)
+                    if shared_param:
+                        new_coef_list.add(shared_param)
+                    else:
+                        new_coef_list.add(coef)
+                else:
+                    new_coef_list.add(coef)
+                coef = coef_iter.Next()
+        
+            # Create new model with shared parameters
+            new_model = ROOT.RooAddPdf(f"{model_name}_shared", f"{model_name} with shared params", 
+                                 pdf_list, new_coef_list)
+            workspace.import_(new_model)
+        
+            print(f"Rebuilt model {model_name} with shared parameter {new_param_name}")
+
+    def _create_simultaneous_dataset(self, workspace: ROOT.RooWorkspace, 
+                               dataset1_name: str, dataset2_name: str,
+                               category: ROOT.RooCategory) -> ROOT.RooDataSet:
+        """
+        Create combined dataset with category variable for RooSimultaneous
+        """
+        dataset1 = workspace.data(dataset1_name)
+        dataset2 = workspace.data(dataset2_name)
+    
+        if not dataset1 or not dataset2:
+            raise ValueError(f"Datasets {dataset1_name} or {dataset2_name} not found")
+    
+        # Get all variables from both datasets
+        vars1 = dataset1.get()
+        vars2 = dataset2.get()
+    
+        # Create combined variable set with category
+        combined_vars = ROOT.RooArgSet(category)
+    
+        # Add variables from first dataset
+        var_iter1 = vars1.createIterator()
+        var = var_iter1.Next()
+        while var:
+            combined_vars.add(var)
+            var = var_iter1.Next()
+    
+        # Add variables from second dataset (if not already present)
+        var_iter2 = vars2.createIterator()
+        var = var_iter2.Next()
+        while var:
+            if not combined_vars.find(var.GetName()):
+                combined_vars.add(var)
+            var = var_iter2.Next()
+    
+        combined_dataset = ROOT.RooDataSet("combined_dataset", "Combined dataset", combined_vars)
+    
+        print("Creating combined dataset with category information...")
+    
+        # Add entries from first dataset with category "var1"
+        category.setLabel("var1")
+        for i in range(dataset1.numEntries()):
+            dataset1.get(i)
+            combined_dataset.add(combined_vars)
+            if i % 10000 == 0:
+                print(f"Added entry {i}/{dataset1.numEntries()} from dataset1")
+    
+        # Add entries from second dataset with category "var2"
+        category.setLabel("var2")
+        for i in range(dataset2.numEntries()):
+            dataset2.get(i)
+            combined_dataset.add(combined_vars)
+            if i % 10000 == 0:
+                print(f"Added entry {i}/{dataset2.numEntries()} from dataset2")
+    
+        total_entries = dataset1.numEntries() + dataset2.numEntries()
+        print(f"Combined dataset created with {combined_dataset.numEntries()} entries (expected: {total_entries})")
+    
+        return combined_dataset
+
+    def _extract_shared_signal_yield(self, workspace: ROOT.RooWorkspace, 
+                               joint_params: List[str]) -> Tuple[float, float]:
+        """
+        Extract shared signal yield from workspace
+        """
+        # Look for shared signal parameter
+        for param_name in joint_params:
+            if "nsig" in param_name or "signal" in param_name:
+                shared_param = workspace.var(f"{param_name}_shared")
+                if shared_param:
+                    return shared_param.getVal(), shared_param.getError()
+    
+        # Fallback: look for any shared parameter
+        for param_name in joint_params:
+            shared_param = workspace.var(f"{param_name}_shared")
+            if shared_param:
+                return shared_param.getVal(), shared_param.getError()
+    
+        print("Warning: No shared signal yield parameter found")
+        return 0.0, 0.0
