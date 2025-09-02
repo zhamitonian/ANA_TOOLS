@@ -35,30 +35,29 @@ class ISRAnalysisTools(BelleAnalysisBase):
         """
         super().__init__(belle_version=belle_version,analysis_mode=analysis_mode)
         self.isr_mode = mode
-        print(f"ISRAnalysisTools initialized with mode: {self.isr_mode}, belle_version: {self.belle_version}, analysis_mode: {self.analysis_mode}")
 
-    def get_extra_gammaE(self, particle_list, path):
+    def get_extra_gammaE(self, particle_list, track_cut, path):
         ma.buildRestOfEvent(target_list_name=particle_list, path=path)
 
         roe_gamma = b2.create_path()
         photonList = 'gamma:extra_gamma' + self.get_random_id()
-        ma.fillParticleList(decayString=photonList,
-                    cut=f'[isInRestOfEvent == 1]',
-                    path=roe_gamma)
 
+        ma.fillParticleList(decayString=photonList,
+                    cut=f'[isInRestOfEvent == 1] and E > 0.1 and eclClusterSpecialTrackMatched({track_cut}) != 1',
+                    path=roe_gamma)
 
         var.addAlias('extra_clusterE', f'totalEnergyOfParticlesInList({photonList})')
 
-        ma.rankByLowest(particleList=photonList,
-                        variable='E_CMS',
-                        numBest=1,
-                        path=roe_gamma)
-
-        ma.variableToSignalSideExtraInfo(
-            photonList,
-            varToExtraInfo={"E_CMS":"extra_gamE"},
-            path=roe_gamma
-        )
+        #ma.rankByLowest(particleList=photonList,
+        #                variable='E_CMS',
+        #                numBest=1,
+        #                path=roe_gamma)
+        
+        #ma.variableToSignalSideExtraInfo(
+        #    photonList,
+        #    varToExtraInfo={"E_CMS":"extra_gamE"},
+        #    path=roe_gamma
+        #)
         ma.variableToSignalSideExtraInfo(
             particle_list,
             varToExtraInfo={"extra_clusterE":"extra_ClusterE"},
