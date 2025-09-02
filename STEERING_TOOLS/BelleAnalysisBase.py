@@ -47,7 +47,8 @@ class BelleAnalysisBase:
         self.output_file = None
         self.is_test_mode = False
         self.command_line_options = {}
-    
+        print(f"BelleAnalysisBase initialized with belle_version: {self.belle_version}, analysis_mode: {self.analysis_mode}")
+
     @staticmethod
     def get_random_id(size=6, chars=string.ascii_uppercase + string.digits):
         """Generate random ID for unique particle list names"""
@@ -131,7 +132,11 @@ class BelleAnalysisBase:
                     self.command_line_options[key] = value
                 else:
                     self.command_line_options[option] = True
+        
                     
+        # Notify about updating mode and version
+        print(f"Updating BelleAnalysisBase to belle_version= {self.belle_version}, analysis_mode= {self.analysis_mode}")
+
         return belle_version, analysis_mode, input_file, output_file
     
     def setup_environment(self):

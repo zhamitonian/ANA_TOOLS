@@ -638,7 +638,7 @@ def perform_chisq_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str]=No
     chisq_var = kwargs.get('chisq_var', 'chisq')
     chisq_range = kwargs.get('chisq_range', (0, 40))
     chisq_bins = kwargs.get('chisq_bins', 80)
-    unbinned = kwargs.get('unbinned', True)
+    unbinned = kwargs.get('unbinned',True)
 
     var_config = [(chisq_var, chisq_range[0], chisq_range[1]), ("vpho_M", 2, 3)]  
     tools = FIT_UTILS(log_file=log_file, var_config=var_config)
@@ -721,7 +721,14 @@ def perform_chisq_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str]=No
                 w.factory(f"RooChiSquarePdf::sig_pdf({chisq_var}, ndof[5, 1, 20])")
         
         # Background chi-squared PDF (typically exponential)
-        w.factory(f"Exponential::bkg_pdf({chisq_var}, exp_slope[-0.1, -1, 0])")
+        w.factory(f"Exponential::bkg_pdf({chisq_var}, exp_slope[-0.1, -10, 10])")
+
+        w.factory("bkg_p0[122.504]")  # Fixed normalization of exponential term
+        w.factory("bkg_p1[59.8483]")  # Fixed decay constant of exponential term
+        w.factory("bkg_p2[40.2843]")  # Fixed normalization of power term
+        w.factory("bkg_p3[1.75904]")  # Fixed power exponent
+        w.factory("bkg_p4[2.04382]")  # Fixed decay constant of power term
+        #w.factory(f"RooGenericPdf::bkg_pdf('bkg_p0*exp(-{chisq_var}/bkg_p1) + bkg_p2*pow({chisq_var},bkg_p3)*exp(-{chisq_var}/bkg_p4)', {{{chisq_var}, bkg_p0, bkg_p1, bkg_p2, bkg_p3, bkg_p4}})")
         
         # Total model
         w.factory("SUM::model(nsig[20000, 0, 40000] * sig_pdf, nbkg[45000, 0, 200000] * bkg_pdf)")
@@ -819,6 +826,7 @@ def perform_chisq_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str]=No
             frame_chisq.SetTitle("")
             frame_chisq.GetXaxis().SetTitle("#chi^{2}")
             frame_chisq.GetYaxis().SetTitle("Candidates")
+            frame_chisq.GetYaxis().CenterTitle()
             frame_chisq.Draw()
             
             leg = ROOT.TLegend(0.75, 0.9 - 0.05*5, 0.95, 0.9)
@@ -848,21 +856,20 @@ def perform_chisq_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str]=No
             leg.SetTextFont(12)
 
             # Calculate chi-square for visualization (note: less meaningful for unbinned fits)
-            if not unbinned:
-                chi2 = frame_chisq.chiSquare("total", "data")
-                data_hist = frame_chisq.getHist("data")
-                nBins = data_hist.GetN()
-                nPars = result.floatParsFinal().getSize()
-                ndf = nBins - nPars
-                chi2_val = chi2 * ndf
-                leg.AddEntry(0, "#chi^{2}/ndf = " + f"{chi2_val:.1f}/{ndf}", "")
-            else:
-                # For unbinned fits, show the negative log likelihood
-                nll = result.minNll()
-                leg.AddEntry(0, f"-log L = {nll:.1f}", "")
+            #if not unbinned:
+            chi2 = frame_chisq.chiSquare("total", "data")
+            data_hist = frame_chisq.getHist("data")
+            nBins = data_hist.GetN()
+            nPars = result.floatParsFinal().getSize()
+            ndf = nBins - nPars
+            chi2_val = chi2 * ndf
+            leg.AddEntry(0, "#chi^{2}/ndf = " + f"{chi2_val:.1f}/{ndf}", "")
+            #else:
+            # For unbinned fits, show the negative log likelihood
+            nll = result.minNll()
+            leg.AddEntry(0, f"-log L = {nll:.1f}", "")
             
             leg.AddEntry(0, "N_{sig}=" + f"{w.var('nsig').getVal():.1f} #pm {w.var('nsig').getError():.1f}", "")
-            leg.AddEntry(0, f"Unbinned fit: {unbinned}", "")
             if bin_fit_range:
                 leg.AddEntry(0, f"Bin: {bin_fit_range}", "")
             leg.Draw()
@@ -925,12 +932,11 @@ def get_effCurve(h_eff: ROOT.TH1, plot_path: str) -> ROOT.TH1:
     """
     h_eff_update = h_eff.Clone("h_eff_fit")
     # Create a polynomial fit function (5th order polynomial)
-    fit_func = ROOT.TF1("eff_fit_func", "pol5", h_eff.GetXaxis().GetXmin(), h_eff.GetXaxis().GetXmax())
+    fit_func = ROOT.TF1("eff_fit_func", "pol4", h_eff.GetXaxis().GetXmin(), h_eff.GetXaxis().GetXmax())
     
     # Fit the histogram
     fit_result = h_eff.Fit(fit_func, "SQR")  # S to return fit result, Q for quiet, R for range
 
-    # Plot the efficiency histogram and fit curve if plot_path is provided
     def plot_efficiency():
         # Apply styling for the plot
         ROOT.gStyle.SetOptStat(0)
