@@ -231,6 +231,7 @@ class QUICK_FIT():
 
         #process each bin sequentially
         successful_fits = 0
+        failed_bins = []
 
         for bin_i in bins_to_fit:
             try:
@@ -239,23 +240,23 @@ class QUICK_FIT():
                 range_cut = f"{bin_var} >= {m_min:.3f} && {bin_var} <= {m_max:.3f}"
                 range_use = f"({m_min:.3f},{m_max:.3f})"
                 
+                print("-----------------------")
                 print(f"Processing bin {bin_i}: {range_cut}")
                 
                 # Create output file paths
                 bin_output = f"{output_dir}bin_{bin_i}" # output_dir/bin_i 
                 bin_log_file = f"{output_dir}bin_{bin_i}.log"
-                print(f"Output file: {bin_output}, Log file: {bin_log_file}")
+                print(f"Log file: {bin_log_file}")
                 
                 rf = ROOT.RDataFrame("event", tree_path)
                 rf = rf.Filter(range_cut + additional_cut)
                 #rf = rf.Filter(range_cut )
 
                 temp_file_path = f"{output_dir}temp_bin_{bin_i}.root"
-                print(temp_file_path)
+                
                 rf.Snapshot("event", temp_file_path)
                 temp_file = ROOT.TFile.Open(temp_file_path)
                 filtered_tree = temp_file.Get("event")
-                print("-----------------------")
 
                 # perform fit
                 try:
@@ -270,7 +271,7 @@ class QUICK_FIT():
                     
                     results[bin_i] = [m_min + bin_step/2, bin_step/2, nsig, nsig_err, nsig_err]
                     
-                    print(f"Bin {bin_i} fit complete: signal yield = {nsig:.2f} ± {nsig_err:.2f}")
+                    print(f"signal yield: {nsig:.2f} ± {nsig_err:.2f}")
 
                     # Convert status codes to a dictionary for better readability
                     status_codes = {
@@ -287,6 +288,7 @@ class QUICK_FIT():
                         print("Fit converged successfully!")
                         successful_fits += 1
                     else:
+                        failed_bins.append(bin_i)
                         print(f"Fit had issues: {status_codes.get(fit_status, 'unknown error')}")
                     
                 except Exception as e:
@@ -308,7 +310,10 @@ class QUICK_FIT():
         
         end_time = time.time()
         
+        print("-----------------------")
         print(f"Batch fitting complete! Successfully fit {successful_fits}/{len(bins_to_fit)} bins.")
+        if successful_fits < len(bins_to_fit):
+            print(f"Failed bins: {failed_bins}")
         print(f"Total time: {end_time - start_time:.1f} seconds")
 
 
