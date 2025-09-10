@@ -30,13 +30,14 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
     """
     reso, mass, width = "phi", 1.0195, 0.004249
     x_min, x_max, nbin = 1, 1.06, 60
+    #x_min, x_max, nbin = 0.985, 1.055, 70 # for argus , kk threshold 0.98736
 
-    var_config = [("phi_M", x_min, x_max),("vpho_M", 2, 3)]  
+    var_config = [("phi_M", x_min, x_max)]  
     tools = FIT_UTILS(log_file=log_file, var_config= var_config)
 
-    print(kwargs)
+    #print(kwargs)
     branches_name = kwargs['branches_name']
-    print(f"Branch names {branches_name}")
+    #print(f"Branch names {branches_name}")
 
     # redirect log
     with tools.redirect_output():
@@ -50,7 +51,7 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
         
         w = ROOT.RooWorkspace("w", "workspace")
         
-        dataset = tools.handle_dataset(tree, w, branches_name, False)
+        dataset = tools.handle_dataset(tree, w, branches_name, True if bin_fit_range is None else False)
         # Save dataset to workspace
         w.Import(dataset, ROOT.RooFit.Rename("dataset"))
 
@@ -59,17 +60,31 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
         
         # Use Breit-Wigner (RooBreitWigner) with PDG values for phi meson
         w.factory(f"BreitWigner::reso_bw({reso}_M, {mass}, {width})")
-        w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.0008, 5e-05, 0.001])")
+        #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.0008, 0.0002, 0.0014])")
+        w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.00083])")
         w.factory(f"FCONV::sig_pdf({reso}_M, reso_bw, smear)")
         
-        # Polynomial , Chebychev 
-        bkg_func = "Chebychev"  
-        bkg_func = "Polynomial"  
-        #w.factory(f"{bkg_func}::bkg_pdf({reso}_M, {{b_0[-10, 10], b_1[-10, 10], b_2[-10, 10], b_3[-10, 10]}})")
-        #w.factory(f"{bkg_func}::bkg_pdf({reso}_M, {{b_0[-10, 10], b_1[-10, 10], b_2[-10, 10]}})")
-        #w.factory(f"{bkg_func}::bkg_pdf({reso}_M, {{b_0[-10, 10], b_1[-10, 10]}})")
-        w.factory(f"{bkg_func}::bkg_pdf({reso}_M, {{b_0[-10, 10]}})")
-        
+        # Polynomial, Chebychev, ArgusBG, or reversed Argus background PDF selection
+        which_bkg = kwargs.get("which_bkg", 1)  # 0: Chebychev, 1: Polynomial, 2: ArgusBG, 3: reversed Argus
+        bkg_order = kwargs.get("bkg_order", 0)  # Order of polynomial/Chebychev (default: 1)
+        bkg_funcs = ["Chebychev", "Polynomial", "ArgusBG", "revArgus"]
+        bkg_func = bkg_funcs[which_bkg]
+
+        if bkg_func in ["Chebychev", "Polynomial"]:
+            # Dynamically build coefficient list for the chosen order
+            coef_list = ", ".join([f"b_{i}[-10, 10]" for i in range(bkg_order + 1)])
+            w.factory(f"{bkg_func}::bkg_pdf({reso}_M, {{{coef_list}}})")
+        elif bkg_func == "ArgusBG":
+            # Standard Argus background
+            w.factory(f"ArgusBG::bkg_pdf({reso}_M, arg_m0[{x_max}], arg_c[-20, -100, -0.01], arg_p[0.5, 0, 1])")
+        elif bkg_func == "revArgus":
+            # Reversed Argus: (m0-m) instead of (m-m0)
+            argus_formula = f"({reso}_M / rev_m0) * pow(1 - pow(rev_m0/{reso}_M, 2), rev_p) * exp(rev_c * (1 - pow(rev_m0/{reso}_M, 2)))"
+            w.factory(f"rev_m0[{x_min}]")
+            w.factory("rev_c[-20, -100, -0.01]")
+            w.factory("rev_p[0.5, 0, 1]")
+            w.factory(f"RooGenericPdf::bkg_pdf('{argus_formula}', {{{reso}_M, rev_m0, rev_c, rev_p}})")
+
         w.factory("SUM::model(nsig[20000, 0, 40000] * sig_pdf, nbkg[45000, 0, 200000] * bkg_pdf)")
 
         # Perform fit
@@ -99,30 +114,29 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
 
 
         # --------------------------------------- splot ---------------------------------------
+        if bin_fit_range is None:
+            # Create sPlot for visualization using phi_M  as discriminating variables
+            sData = RooStats.SPlot("sData", "sPlot", dataset, model,
+                                ROOT.RooArgList(w.var("nsig"), w.var("nbkg")))
+            for i in range(dataset.numEntries()):
+                row = dataset.get(i)
+                nsig_sw = row.getRealValue("nsig_sw")
 
-        # Create sPlot for visualization using phi_M  as discriminating variables
-        sData = RooStats.SPlot("sData", "sPlot", dataset, model,
-                               ROOT.RooArgList(w.var("nsig"), w.var("nbkg")))
-        for i in range(dataset.numEntries()):
-            row = dataset.get(i)
-            nsig_sw = row.getRealValue("nsig_sw")
-            #print(f"Entry {i}: nsig_sw = {nsig_sw}")
+            # Print the yields with their uncertainties
+            print(f"Signal yield: {w.var('nsig').getVal()} ± {w.var('nsig').getError()}")
+            print(f"Background yield: {w.var('nbkg').getVal()} ± {w.var('nbkg').getError()}")
+            
+            # Create sWeighted datasets
+            sWeighted_data = ROOT.RooDataSet("sWeighted_data", "Data with sWeights", 
+                                            dataset, dataset.get(), "", "nsig_sw")
+            bkg_weighted_data = ROOT.RooDataSet("bkg_weighted_data", "Data with background sWeights", 
+                                            dataset, dataset.get(), "", "nbkg_sw")
+            
+            out_file = ROOT.TFile(output_dir + "splot_output.root", "RECREATE")
+            sWeighted_data.Write("signal_weighted_data")
+            bkg_weighted_data.Write("background_weighted_data")
 
-        # Print the yields with their uncertainties
-        print(f"Signal yield: {w.var('nsig').getVal()} ± {w.var('nsig').getError()}")
-        print(f"Background yield: {w.var('nbkg').getVal()} ± {w.var('nbkg').getError()}")
-        
-        # Create sWeighted datasets
-        sWeighted_data = ROOT.RooDataSet("sWeighted_data", "Data with sWeights", 
-                                        dataset, dataset.get(), "", "nsig_sw")
-        bkg_weighted_data = ROOT.RooDataSet("bkg_weighted_data", "Data with background sWeights", 
-                                          dataset, dataset.get(), "", "nbkg_sw")
-        
-        out_file = ROOT.TFile(output_dir + "splot_output.root", "RECREATE")
-        sWeighted_data.Write("signal_weighted_data")
-        bkg_weighted_data.Write("background_weighted_data")
-
-        out_file.Close()
+            out_file.Close()
         
         #----------------------------- plot distribution  ------------------------
         ROOT.gStyle.SetLabelSize(0.04,"xyz")
@@ -133,8 +147,8 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
         ROOT.gStyle.SetTitleSize(0.04,"xyz")
         ROOT.gStyle.SetOptTitle(0)
         ROOT.gStyle.SetMarkerSize(0.5)
-        ROOT.gStyle.SetLabelFont(12,"XYZ")
-        ROOT.gStyle.SetTitleFont(12,"XYZ")
+        ROOT.gStyle.SetLabelFont(22,"XYZ")
+        ROOT.gStyle.SetTitleFont(22,"XYZ")
         ROOT.gStyle.SetCanvasDefH(1080)
         ROOT.gStyle.SetCanvasDefW(1600)
         ROOT.gStyle.SetCanvasColor(ROOT.kWhite)
@@ -178,8 +192,10 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
             framex.Draw()
 
             leg = ROOT.TLegend(0.75, 0.9 - 0.05*5, 0.95, 0.9)
-            leg.SetBorderSize(1)
+            leg.SetBorderSize(0)
             leg.SetFillStyle(0)
+            leg.SetFillColor(0)
+            leg.SetTextFont(22)
             
             # Create simple entries with correct colors
             data_entry = ROOT.TMarker(0, 0, 20)
@@ -215,12 +231,24 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
             # Calculate chi-square
             chi2_val = chi2 * ndf
             
-            # print(f"Chi2: {chi2_val:.2f}, ndf: {ndf}, chi2/ndf: {chi2:.4f}")
-            
-            #leg.AddEntry(0, "#chi^{2}/ndf = " + f"{chi2:.4f} ({chi2_val:.1f}/{ndf})", "")
-            leg.AddEntry(0, "#chi^{2}/ndf = " + f"{chi2_val:.1f}/{ndf}", "")
+            unbinned = kwargs.get('unbinned', True)
+            if unbinned:
+                # 对于unbinned拟合，显示NLL值
+                nll = result.minNll()
+                leg.AddEntry(0, f"NLL = {nll:.1f}", "")
+            else:
+                # 对于binned拟合，保留原有的χ²/ndof显示
+                chi2 = framex.chiSquare("sum", "data")  # Get reduced chi-square
+                data_hist = framex.getHist("data")
+                nBins = data_hist.GetN()
+                nPars = result.floatParsFinal().getSize()
+                ndf = nBins - nPars
+                chi2_val = chi2 * ndf
+                leg.AddEntry(0, "#chi^{2}/ndf = " + f"{chi2_val:.1f}/{ndf}", "")
+
             leg.AddEntry(0, "N_{sig}=" + f"{w.var('nsig').getVal():.1f} #pm {w.var('nsig').getError():.1f}", "")
-            leg.AddEntry(0, "#sigma_{gauss} = " + f"{w.var('smear_sigma').getVal():.2e} #pm {w.var('smear_sigma').getError():.2e}", "")
+            #leg.AddEntry(0, "#sigma_{gauss} = " + f"{w.var('smear_sigma').getVal():.2e} #pm {w.var('smear_sigma').getError():.2e}", "")
+            leg.AddEntry(0, "#sigma_{gauss} = " + f"{(w.var('smear_sigma').getVal()*1000):.2f} #pm {(w.var('smear_sigma').getError()*1000):.2f} MeV", "")
 
             if bin_fit_range:
                 leg.AddEntry(0, f"Bin: {bin_fit_range}", "")
@@ -245,7 +273,6 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
             framex_pull.GetXaxis().SetLabelSize(0.13)
             x_title = "M_{K^{+}K^{-}} (GeV/c^{2})" if var_name == "phi_M" else "M_{reso}"
             framex_pull.GetXaxis().SetTitle(x_title)
-            #framex_pull.GetXaxis().SetTitle("M_{K^{+}K^{-}} (GeV/c^{2})")
             framex_pull.GetXaxis().CenterTitle()
             framex_pull.GetXaxis().SetTitleSize(0.12)
             framex_pull.GetXaxis().SetTitleOffset(1.1)
@@ -555,10 +582,21 @@ def perform_2dfit(tree:ROOT.TTree, output_dir:dir, log_file = None, bin_fit_rang
             # Calculate chi-square
             chi2_val = chi2 * ndf
             
-            # print(f"Chi2: {chi2_val:.2f}, ndf: {ndf}, chi2/ndf: {chi2:.4f}")
-            
-            #leg.AddEntry(0, "#chi^{2}/ndf = " + f"{chi2:.4f} ({chi2_val:.1f}/{ndf})", "")
-            leg.AddEntry(0, "#chi^{2}/ndf = " + f"{chi2_val:.1f}/{ndf}", "")
+            unbinned = kwargs.get('unbinned', True)
+            if unbinned:
+                # 对于unbinned拟合，显示NLL值
+                nll = result.minNll()
+                leg.AddEntry(0, f"NLL = {nll:.1f}", "")
+            else:
+                # 对于binned拟合，保留原有的χ²/ndof显示
+                chi2 = framex.chiSquare("sum", "data")  # Get reduced chi-square
+                data_hist = framex.getHist("data")
+                nBins = data_hist.GetN()
+                nPars = result.floatParsFinal().getSize()
+                ndf = nBins - nPars
+                chi2_val = chi2 * ndf
+                leg.AddEntry(0, "#chi^{2}/ndf = " + f"{chi2_val:.1f}/{ndf}", "")
+
             leg.AddEntry(0, "N_{sig}=" + f"{w.var('nsig').getVal():.1f} #pm {w.var('nsig').getError():.1f}", "")
             if var_name == "phi1_M":
                 leg.AddEntry(0, "#sigma_{gauss} = " + f"{w.var('smear_sigma1').getVal():.2e} #pm {w.var('smear_sigma1').getError():.2e}", "")
@@ -643,9 +681,9 @@ def perform_chisq_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str]=No
     var_config = [(chisq_var, chisq_range[0], chisq_range[1]), ("vpho_M", 2, 3)]  
     tools = FIT_UTILS(log_file=log_file, var_config=var_config)
 
-    print(kwargs)
+    #print(kwargs)
     branches_name = kwargs.get('branches_name', None)
-    print(f"Branch names {branches_name}")
+    #print(f"Branch names {branches_name}")
 
     # redirect log
     with tools.redirect_output():
@@ -932,7 +970,7 @@ def get_effCurve(h_eff: ROOT.TH1, plot_path: str) -> ROOT.TH1:
     """
     h_eff_update = h_eff.Clone("h_eff_fit")
     # Create a polynomial fit function (5th order polynomial)
-    fit_func = ROOT.TF1("eff_fit_func", "pol4", h_eff.GetXaxis().GetXmin(), h_eff.GetXaxis().GetXmax())
+    fit_func = ROOT.TF1("eff_fit_func", "pol5", h_eff.GetXaxis().GetXmin(), h_eff.GetXaxis().GetXmax())
     
     # Fit the histogram
     fit_result = h_eff.Fit(fit_func, "SQR")  # S to return fit result, Q for quiet, R for range
