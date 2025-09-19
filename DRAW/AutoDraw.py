@@ -151,8 +151,6 @@ def style_draw(
     ROOT.gStyle.SetTitleSize(0.04,"xyz")
     ROOT.gStyle.SetOptTitle(0)
     ROOT.gStyle.SetMarkerSize(0.5)
-    ROOT.gStyle.SetLabelFont(22,"XYZ")
-    ROOT.gStyle.SetTitleFont(22,"XYZ")
     ROOT.gStyle.SetCanvasDefH(1080)
     ROOT.gStyle.SetCanvasDefW(1600)
     ROOT.gStyle.SetCanvasColor(ROOT.kWhite)
@@ -160,6 +158,11 @@ def style_draw(
     ROOT.gStyle.SetPadTickY(1)
     ROOT.gStyle.SetPadGridX(1)
     ROOT.gStyle.SetPadGridY(1)
+    ROOT.gStyle.SetLegendFont(22)
+    ROOT.gStyle.SetLegendBorderSize(0)
+    ROOT.gStyle.SetLegendFillColor(0)
+    ROOT.gStyle.SetLabelFont(22,"XYZ")
+    ROOT.gStyle.SetTitleFont(22,"XYZ")
     
     # Ensure we have enough styles for all histograms
     styles = ensure_styles(num, styles)
@@ -203,9 +206,14 @@ def style_draw(
         hist_list[i].SetMarkerSize(styles[i].marker_size)
         hist_list[i].SetMarkerColor(styles[i].line_color)
         
-        # Set Y-axis title if not already set
-        if not hist_list[0].GetYaxis().GetTitle():
-            hist_list[i].GetYaxis().SetTitle(f"Events/({hist_list[0].GetBinWidth(1)*1000:.3f}MeV)")
+        # Set Y-axis , you could give y axis unit in original title place
+        y_unit = hist_list[0].GetYaxis().GetTitle()
+        bin_width = hist_list[0].GetBinWidth(1)
+        if y_unit == "MeV":
+            title = f"Events/({bin_width * 1000:.2f} MeV)"
+        else:
+            title = f"Events/({bin_width:.2f} {y_unit})"
+        hist_list[i].GetYaxis().SetTitle(title)
         
         # Apply fill style to all histograms that need it
         if styles[i].stack or styles[i].fill:
@@ -314,9 +322,7 @@ def style_draw(
     else:  # right (default)
         legend = ROOT.TLegend(0.73, 0.9 - 0.16 * num_stats - 0.05 * num, 0.93, 0.9 - 0.16 * num_stats)
     
-    legend.SetBorderSize(0)
     legend.SetFillStyle(0)
-    legend.SetFillColor(0)
     
     # Add legend entries if provided
     if leg_texts:
@@ -338,6 +344,11 @@ def style_draw(
     c.Update()
     
     # Save output
+    # Ensure output directory exists
+    out_dir = os.path.dirname(output_name)
+    if out_dir and not os.path.exists(out_dir):
+        os.makedirs(out_dir, exist_ok=True)
+
     if output_name.endswith(".root"):
         try:
             root_file = ROOT.TFile.Open(output_name, "UPDATE")
@@ -393,8 +404,8 @@ def graph_draw(
     ROOT.gStyle.SetTitleSize(0.04,"xyz")
     ROOT.gStyle.SetOptTitle(0)
     ROOT.gStyle.SetMarkerSize(0.5)
-    ROOT.gStyle.SetLabelFont(42,"XYZ")
-    ROOT.gStyle.SetTitleFont(42,"XYZ")
+    ROOT.gStyle.SetLabelFont(22,"XYZ")
+    ROOT.gStyle.SetTitleFont(22,"XYZ")
     ROOT.gStyle.SetCanvasDefH(1080)
     ROOT.gStyle.SetCanvasDefW(1600)
     ROOT.gStyle.SetCanvasColor(ROOT.kWhite)

@@ -29,8 +29,9 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
             branches_name: List of branch names to combine (e.g., ["phi1_M", "phi2_M"])
     """
     reso, mass, width = "phi", 1.0195, 0.004249
-    x_min, x_max, nbin = 1, 1.06, 60
-    #x_min, x_max, nbin = 0.985, 1.055, 70 # for argus , kk threshold 0.98736
+
+    x_min, x_max, nbin = 0.986, 1.06, 37# for argus , kk threshold 0.98736
+    x_min, x_max, nbin = 1, 1.06, 30
 
     var_config = [("phi_M", x_min, x_max)]  
     tools = FIT_UTILS(log_file=log_file, var_config= var_config)
@@ -51,7 +52,8 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
         
         w = ROOT.RooWorkspace("w", "workspace")
         
-        dataset = tools.handle_dataset(tree, w, branches_name, True if bin_fit_range is None else False)
+        #dataset = tools.handle_dataset(tree, w, branches_name, True if bin_fit_range is None else False)
+        dataset = tools.handle_dataset(tree, w, branches_name, False)
         # Save dataset to workspace
         w.Import(dataset, ROOT.RooFit.Rename("dataset"))
 
@@ -66,7 +68,7 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
         
         # Polynomial, Chebychev, ArgusBG, or reversed Argus background PDF selection
         which_bkg = kwargs.get("which_bkg", 1)  # 0: Chebychev, 1: Polynomial, 2: ArgusBG, 3: reversed Argus
-        bkg_order = kwargs.get("bkg_order", 0)  # Order of polynomial/Chebychev (default: 1)
+        bkg_order = kwargs.get("bkg_order", 1)  # Order of polynomial/Chebychev (default: 1)
         bkg_funcs = ["Chebychev", "Polynomial", "ArgusBG", "revArgus"]
         bkg_func = bkg_funcs[which_bkg]
 
@@ -175,6 +177,7 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
             pad1.Draw()
 
             framex = w.var(var_name).frame()
+            #framex.GetXaxis().SetRangeUser(0.986, 1.06)
             dataset.plotOn(framex, rf.Name("data"), rf.MarkerColor(ROOT.kBlack), rf.MarkerStyle(20), rf.Binning(nbin))
             model.plotOn(framex, rf.Name("sum"), rf.LineColor(4))
             model.plotOn(framex, rf.Components("sig_pdf"), rf.Name("signal"), rf.LineColor(2), rf.LineStyle(4), rf.LineWidth(3))
@@ -233,6 +236,7 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
             
             unbinned = kwargs.get('unbinned', True)
             if unbinned:
+                pass
                 # 对于unbinned拟合，显示NLL值
                 nll = result.minNll()
                 leg.AddEntry(0, f"NLL = {nll:.1f}", "")
@@ -276,6 +280,7 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
             framex_pull.GetXaxis().CenterTitle()
             framex_pull.GetXaxis().SetTitleSize(0.12)
             framex_pull.GetXaxis().SetTitleOffset(1.1)
+            #framex_pull.GetXaxis().SetRangeUser(0.986, 1.06)
 
             pullhist = framex.pullHist("data", "sum")
             framex_pull.addObject(pullhist, "P")
