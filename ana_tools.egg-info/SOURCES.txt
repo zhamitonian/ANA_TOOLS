@@ -3,6 +3,7 @@ setup.py
 DRAW/AutoDraw.py
 DRAW/Ploter.py
 DRAW/__init__.py
+DRAW/draw_rho00_summary.py
 FIT/__init__.py
 FIT/fit_functions.py
 FIT/fit_tools.py
