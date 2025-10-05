@@ -30,7 +30,7 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
     """
     reso, mass, width = "phi", 1.0195, 0.004249
 
-    x_min, x_max, nbin = 0.986, 1.06, 37# for argus , kk threshold 0.98736
+    #x_min, x_max, nbin = 0.986, 1.06, 37# for argus , kk threshold 0.98736
     x_min, x_max, nbin = 1, 1.06, 30
 
     var_config = [("phi_M", x_min, x_max)]  
@@ -67,9 +67,9 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
         w.factory(f"FCONV::sig_pdf({reso}_M, reso_bw, smear)")
         
         # Polynomial, Chebychev, ArgusBG, or reversed Argus background PDF selection
-        which_bkg = kwargs.get("which_bkg", 1)  # 0: Chebychev, 1: Polynomial, 2: ArgusBG, 3: reversed Argus
+        which_bkg = kwargs.get("which_bkg", 3)  # 0: Chebychev, 1: Polynomial, 2: ArgusBG, 3: reversed Argus
         bkg_order = kwargs.get("bkg_order", 1)  # Order of polynomial/Chebychev (default: 1)
-        bkg_funcs = ["Chebychev", "Polynomial", "ArgusBG", "revArgus"]
+        bkg_funcs = ["Chebychev", "Polynomial", "ArgusBG", "revArgus", "custom"]
         bkg_func = bkg_funcs[which_bkg]
 
         if bkg_func in ["Chebychev", "Polynomial"]:
@@ -82,10 +82,19 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
         elif bkg_func == "revArgus":
             # Reversed Argus: (m0-m) instead of (m-m0)
             argus_formula = f"({reso}_M / rev_m0) * pow(1 - pow(rev_m0/{reso}_M, 2), rev_p) * exp(rev_c * (1 - pow(rev_m0/{reso}_M, 2)))"
-            w.factory(f"rev_m0[{x_min}]")
+            #w.factory(f"rev_m0[{x_min}]")
+            w.factory(f"rev_m0[0.986]")
             w.factory("rev_c[-20, -100, -0.01]")
             w.factory("rev_p[0.5, 0, 1]")
             w.factory(f"RooGenericPdf::bkg_pdf('{argus_formula}', {{{reso}_M, rev_m0, rev_c, rev_p}})")
+        elif bkg_func == "custom":
+            formula = f"a*pow({reso}_M - m0, b)* exp(c * ({reso}_M - m0))"
+            #w.factory(f"m0[{x_min}]")
+            w.factory(f"m0[0.986]")
+            w.factory("a[1, -10000, 100000]")
+            w.factory("b[0.5, -10, 10]")
+            w.factory("c[-1, -100, 100]")
+            w.factory(f"RooGenericPdf::bkg_pdf('{formula}', {{{reso}_M, m0, a, b, c}})")
 
         w.factory("SUM::model(nsig[20000, 0, 40000] * sig_pdf, nbkg[45000, 0, 200000] * bkg_pdf)")
 
