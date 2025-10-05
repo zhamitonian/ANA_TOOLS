@@ -247,11 +247,13 @@ def style_draw(
         global_max = max( hs_stacked.GetStack().Last().GetMaximum() ,global_max)
 
     # Add some padding to the global range
-    if global_min > 0 and not log_y:
-        global_min = 0  # Start from 0 for linear scale if possible
-    if log_y and global_min <= 0:
-        global_min = 0.1  # Avoid 0 or negative values for log scale
-    global_max *= 1.1  # Add 10% padding at the top
+    if log_y:
+        global_min = max(global_min, 0.1)
+        global_max *= 10
+    else:
+        global_min = 0 if global_min > 0 else global_min
+        global_min *= 1.1
+        global_max *= 1.1  # Add 10% padding
      
     # Use user-provided range if specified, otherwise use calculated global range
     final_min = y_min if use_user_y_range and y_max > y_min else global_min
