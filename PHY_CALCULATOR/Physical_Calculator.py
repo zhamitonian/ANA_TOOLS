@@ -253,7 +253,7 @@ class PhysicsCalculator:
         """Calculate ISR luminosity"""
         luminosities = {10.58: 365.55} if luminosities is None else luminosities
      
-        h_lum = ROOT.TH1F("lumino", ";#sqrt{s^{`}}[GeV];L_{eff} [pb^{-1}]", self.nbin_tot, self.bins)       
+        h_lum = ROOT.TH1F("lumino", ";#sqrt{s^{\\prime}}(GeV);L_{eff} [pb^{-1}]", self.nbin_tot, self.bins)       
         
         for i in range(h_lum.GetNbinsX()):
             bin_left = h_lum.GetBinLowEdge(i + 1) 

@@ -167,7 +167,8 @@ def style_draw(
     working_hists = cloned_hists
     
     ROOT.gStyle.SetLabelSize(0.04,"xyz")
-    ROOT.gStyle.SetTitleSize(0.04,"xyz")
+    #ROOT.gStyle.SetTitleSize(0.04,"xyz")
+    ROOT.gStyle.SetTitleSize(0.05,"xyz")
     ROOT.gStyle.SetOptTitle(0)
     ROOT.gStyle.SetMarkerSize(0.5)
     ROOT.gStyle.SetCanvasColor(ROOT.kWhite)
@@ -257,6 +258,8 @@ def style_draw(
             else:
                 title = f"Events/({bin_width:.2f})"
         h.GetYaxis().SetTitle(title)
+        #h.GetYaxis().SetTitleSize(0.05)
+        #h.GetXaxis().SetTitleSize(0.05)
         
         # Apply fill style to all histograms that need it
         if styles[i].stack or styles[i].fill:
@@ -364,6 +367,7 @@ def style_draw(
     
     legend.SetFillStyle(0)
     legend.SetBorderSize(0)
+    legend.SetTextSize(0.06)
     
     # Add legend entries if provided
     if leg_texts:
