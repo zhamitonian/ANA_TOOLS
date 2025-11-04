@@ -103,6 +103,9 @@ class PhysicsCalculator:
         
         file.Close()
 
+
+    ''' 
+    would cause error at the margin we generate MC , temporarily not use it
     def calculateEfficiency(self, rootFile_config: Dict[str, Tuple[str, str]], 
                             process_func:Optional[callable] = None, 
                             truth_varDefine:Optional[callable] = None) -> ROOT.TH1F:
@@ -149,7 +152,7 @@ class PhysicsCalculator:
         for i in range(1, truth_hist.GetNbinsX() + 1):
             if reco_hist.GetBinContent(i) > truth_hist.GetBinContent(i):
                 print(f"Warning: Bin {i} has reco ({reco_hist.GetBinContent(i)}) > truth ({truth_hist.GetBinContent(i)})")
-        #return truth_hist
+        
         # Calculate efficiency
         eff = ROOT.TEfficiency(reco_hist, truth_hist)
         eff.SetStatisticOption(ROOT.TEfficiency.kFCP)  # R.TEfficiency.kFCP
@@ -162,6 +165,106 @@ class PhysicsCalculator:
         h_efficiency.GetYaxis().SetTitle("#varepsilon")
         h_efficiency.GetXaxis().SetTitle("#sqrt{s'} [GeV]")
 
+        return h_efficiency
+    '''
+
+    def calculateEfficiency(self, rootFile_config: Dict[str, Tuple[str, str]], 
+                    process_func:Optional[callable] = None, 
+                    truth_varDefine:Optional[callable] = None) -> ROOT.TH1F:
+        """
+        Calculate and save efficiency histogram from truth and reconstruction histograms
+        
+        Parameters:
+        -----------
+        rootFile_config: Dict["tree name": ("branch name", "path/to/file.root")]
+            Dictionary with exactly two items: {"truth": (...), "reconstruction": (...)}
+            Example: {"truth": ("mc_vpho_M", "path/to/file.root"), 
+                      "ISRphiKK": ("M_phikk", "path/to/file.root")}
+        Returns:
+        --------
+        ROOT.TH1F
+            Efficiency histogram (reconstruction/truth)
+        
+        Raises:
+        -------
+        ValueError
+            If root_files doesn't contain exactly two items
+        """
+        # Ensure there are exactly two items
+        if len( rootFile_config) != 2:
+            raise ValueError(f"root_files must contain exactly 2 items, but got {len(rootFile_config)}")
+        
+        # Extract the two keys (in a stable order)
+        keys = list(rootFile_config.keys())
+        truth_key = keys[0]  # First key is assumed to be truth
+        reco_key = keys[1]   # Second key is assumed to be reconstruction
+
+        df_truth = ROOT.RDataFrame(truth_key, rootFile_config[truth_key][1])
+        df_reco = ROOT.RDataFrame(reco_key, rootFile_config[reco_key][1])
+        
+        if process_func is not None:
+            df_reco = process_func(df_reco)
+        if truth_varDefine is not None:
+            df_truth = truth_varDefine(df_truth) 
+
+        # Create histograms for both entries
+        truth_hist = df_truth.Histo1D(self.hist_model, rootFile_config[truth_key][0]).GetValue()
+        reco_hist = df_reco.Histo1D(self.hist_model, rootFile_config[reco_key][0]).GetValue()
+
+        for i in range(1, truth_hist.GetNbinsX() + 1):
+            if reco_hist.GetBinContent(i) > truth_hist.GetBinContent(i):
+                print(f"Warning: Bin {i} has reco ({reco_hist.GetBinContent(i)}) > truth ({truth_hist.GetBinContent(i)})")
+        
+        # Calculate efficiency
+        h_efficiency = reco_hist.Clone("effi")
+        h_efficiency.Sumw2()
+        
+        for i in range(1, reco_hist.GetNbinsX() + 1):
+            n_truth = truth_hist.GetBinContent(i)
+            n_reco = reco_hist.GetBinContent(i)
+            
+            # 特别处理边界 bin
+            is_boundary_bin = (i == 1 or i == reco_hist.GetNbinsX())
+            
+            if n_truth > 0:
+                eff = n_reco / n_truth
+                
+                # 处理边界 bin 可能的异常情况
+                if is_boundary_bin and eff > 1.0:
+                    print(f"Warning: Boundary bin {i} has efficiency > 1 ({eff}), capping at 1.0")
+                    eff = 1.0
+                    err = 0.0
+                elif is_boundary_bin and n_truth < 5:  # 边界 bin 统计量太少
+                    print(f"Warning: Boundary bin {i} has low statistics (truth={n_truth}), using Wilson score interval")
+                    # Wilson score interval for low statistics
+                    if n_reco > 0:
+                        z = 1.0  # ~68% confidence level
+                        p_hat = n_reco / n_truth
+                        denominator = 1 + z*z/n_truth
+                        center = (p_hat + z*z/(2*n_truth)) / denominator
+                        halfwidth = z * math.sqrt(p_hat*(1-p_hat)/n_truth + z*z/(4*n_truth*n_truth)) / denominator
+                        eff = center
+                        err = halfwidth
+                    else:
+                        eff = 0
+                        err = 0
+                else:
+                    # 正常的二项分布误差计算
+                    err = math.sqrt(eff * (1 - eff) / n_truth) if n_truth > 0 else 0
+            else:
+                # 真实事例数为零
+                eff = 0
+                err = 0
+            
+            h_efficiency.SetBinContent(i, eff)
+            h_efficiency.SetBinError(i, err)
+        
+        h_efficiency.GetYaxis().SetTitle("#varepsilon")
+        h_efficiency.GetXaxis().SetTitle("#sqrt{s'} [GeV]")
+        
+        # 保存结果
+        self.saveHist(h_efficiency, "efficiency")
+        
         return h_efficiency
         
         
@@ -253,7 +356,7 @@ class PhysicsCalculator:
         """Calculate ISR luminosity"""
         luminosities = {10.58: 365.55} if luminosities is None else luminosities
      
-        h_lum = ROOT.TH1F("lumino", ";#sqrt{s^{`}}[GeV];L_{eff} [pb^{-1}]", self.nbin_tot, self.bins)       
+        h_lum = ROOT.TH1F("lumino", ";#sqrt{s^{\\prime}}(GeV);L_{eff} [pb^{-1}]", self.nbin_tot, self.bins)       
         
         for i in range(h_lum.GetNbinsX()):
             bin_left = h_lum.GetBinLowEdge(i + 1) 

@@ -49,6 +49,8 @@ class BelleAnalysisBase:
         self.command_line_options = {}
         print(f"BelleAnalysisBase initialized with belle_version: {self.belle_version}, analysis_mode: {self.analysis_mode}")
 
+        self.setup_environment()
+
     @staticmethod
     def get_random_id(size=6, chars=string.ascii_uppercase + string.digits):
         """Generate random ID for unique particle list names"""
@@ -136,6 +138,7 @@ class BelleAnalysisBase:
                     
         # Notify about updating mode and version
         print(f"Updating BelleAnalysisBase to belle_version= {self.belle_version}, analysis_mode= {self.analysis_mode}")
+        self.setup_environment()
 
         return belle_version, analysis_mode, input_file, output_file
     
@@ -154,10 +157,11 @@ class BelleAnalysisBase:
             b2.conditions.globaltags=['B2BII','BellePID',
                                           'b2bii_beamParameters_with_smearing']
             if self.is_signal_mc or self.is_generic_mc:
-                b2.conditions.prepend_globaltag=['B2BII_MC']
+                b2.conditions.prepend_globaltag('B2BII_MC')
  
             b2.conditions.prepend_globaltag('Legacy_CollisionAxisCMS_Belle')
             b2.conditions.prepend_globaltag('analysis_b2bii')
+            print("Environment set for Belle I analysis")
             return True
         return False
     
@@ -222,7 +226,8 @@ class BelleAnalysisBase:
         var.addAlias('px_CMS', 'useCMSFrame(px)')
         var.addAlias('py_CMS', 'useCMSFrame(py)')
         var.addAlias('pz_CMS', 'useCMSFrame(pz)')
-        var.addAlias('theta_CMS', 'useCMSFrame(cosTheta)')
+        #var.addAlias('theta_CMS', 'useCMSFrame(cosTheta)')
+        var.addAlias('theta_CMS', 'useCMSFrame(theta)')
         var.addAlias('phi_CMS', 'useCMSFrame(phi)')
         
         # Useful aliases for both Belle I and Belle II

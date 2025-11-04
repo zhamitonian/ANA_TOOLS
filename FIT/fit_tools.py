@@ -67,26 +67,23 @@ class FIT_UTILS():
                        branches_name:Optional[List[str]] = None, 
                        save_rootFile:bool = False) -> ROOT.RooDataSet:
         """
-        Create corresponding RooRealVariable objects in the workspace , and create the RooDataSet
-        and if branches_name are provided, create a combined dataset from the specified branches.
+        Create corresponding RooRealVariable objects in the workspace, and create the RooDataSet.
+        If branches_name are provided, create a combined dataset from the specified branches.
         
         Args:
             tree: ROOT TTree object
             workspace: RooWorkspace object
-            branches_name: List of branch names to combine, e.g. ["phi1_M", "phi2_M"]
-            save_rootFile: bool, whether to save the combined dataset to a ROOT file , 
-                default is False, if True, the combined dataset will be saved to "combined.root",
-                when not save ROOT file, the quick strategy is used to create the dataset.
+            branches_name: List of branch names to combine (can be RVec types)
+            save_rootFile: bool, whether to save the combined dataset to a ROOT file
         
         Returns:
-            ROOT.RooDataSet: Combined dataset
+            ROOT.RooDataSet: Combined dataset with flattened entries if needed
         """
         var_configs = self.var_config
         
-        # Get variables from the workspace
+        # Create RooRealVariables in workspace
         arg_set = ROOT.RooArgSet()
         for config in var_configs:
-            # Create RooRealVariable in the workspace with name same to the branch name
             workspace.factory(f"{config[0]}[{config[1]},{config[2]}]") 
             arg_set.add(workspace.var(config[0]))
 
@@ -94,49 +91,22 @@ class FIT_UTILS():
             dataset = ROOT.RooDataSet("dataset", "dataset", tree, arg_set)
             return dataset
 
-        if not save_rootFile:
-            # Create empty dataset with the configured variables
-            dataset = ROOT.RooDataSet("dataset", "Combined dataset",arg_set)
-            fit_var = workspace.var(var_configs[0][0])  # The first variable is the one used for fitting
-            other_vars = [workspace.var(config[0]) for config in var_configs[1:]]
+        # Create empty dataset
+        dataset = ROOT.RooDataSet("dataset", "Combined dataset", arg_set)
+        fit_var = workspace.var(var_configs[0][0])
+        other_vars = [workspace.var(config[0]) for config in var_configs[1:]]
 
-            print(f"Combining branches: {branches_name}")
-            
-            # Iterate through each event in the tree
-            total_entries = 0
-            for i, event in enumerate(tree):
-                if i % 10000 == 0:
-                    print(f"Processing event {i}...")
-                    
-                # Get other variables' value from the event
-                other_values = [getattr(event, var_config[0]) for var_config in var_configs[1:]]
-                
-                # For each specified branch, add its value as an entry to the dataset
-                for branch_name in branches_name:
-                    try:
-                        # Get current branch value
-                        branch_value = getattr(event, branch_name)
-                        
-                        # Check if value is within reasonable range
-                        if var_configs[0][1] <= branch_value <= var_configs[0][2]:
-                            # Set variable values
-                            fit_var.setVal(branch_value)
+        print(f"Combining branches: {branches_name}")
+        
+        total_entries = 0
+        var_min, var_max = var_configs[0][1], var_configs[0][2]
 
-                            for var, value in zip(other_vars, other_values):
-                                var.setVal(value)
-                            
-                            # Add to dataset
-                            dataset.add(arg_set)
-                            total_entries += 1
-                            
-                    except AttributeError:
-                        print(f"Warning: Branch {branch_name} not found in event {i}")
-                        continue
-        else:
+        # save file  not supported for vector branches yet
+        if save_rootFile:
             df = ROOT.RDataFrame(tree)
             temp_files = [f"temp_{i}.root" for i in range(len(branches_name))]
             for i,branch_name in enumerate(branches_name):
-                filter_condition = f"{branch_name} >= {var_configs[0][1]} && {branch_name} <= {var_configs[0][2]}"
+                filter_condition = f"{branch_name} >= {var_min} && {branch_name} <= {var_max}"
                 df.Filter(filter_condition).Redefine(f'{var_configs[0][0]}',f'{branch_name}').Snapshot("event", temp_files[i])
 
             # Combine all filtered data using a TChain
@@ -152,42 +122,203 @@ class FIT_UTILS():
             # Clean up temporary files
             for temp_file in temp_files:
                 os.remove(temp_file)
+            return dataset
+        
+        # Helper function to add entry to dataset
+        def add_entry(value):
+            nonlocal total_entries
+            if var_min <= value <= var_max:
+                fit_var.setVal(value)
+                for var, other_val in zip(other_vars, other_values):
+                    var.setVal(other_val)
+                dataset.add(arg_set)
+                total_entries += 1
+        
+        # Iterate through tree
+        for i, event in enumerate(tree):
+            if i % 10000 == 0:
+                print(f"Processing event {i}...")
+            
+            # Get other variables' values (common for both vector and scalar)
+            other_values = [getattr(event, var_config[0]) for var_config in var_configs[1:]]
+            
+            # Check if branches are vectors (RVec or std::vector)
+            first_branch = getattr(event, branches_name[0])
+            is_vector = hasattr(first_branch, '__len__') and not isinstance(first_branch, str)
+            
+            if is_vector:
+                # Handle vector branches: flatten by iterating over all branches and their elements
+                for branch_name in branches_name:
+                    try:
+                        branch_vec = getattr(event, branch_name)
+                        # Iterate over each element in the vector
+                        for value in branch_vec:
+                            add_entry(value)
+                    except AttributeError:
+                        print(f"Warning: Branch {branch_name} not found in event {i}")
+                        continue
+            else:
+                # Handle scalar branches
+                for branch_name in branches_name:
+                    try:
+                        branch_value = getattr(event, branch_name)
+                        add_entry(branch_value)
+                    except AttributeError:
+                        print(f"Warning: Branch {branch_name} not found in event {i}")
+                        continue
 
         print(f"Combined dataset created with {total_entries} entries")
         print(f"Original tree had {tree.GetEntries()} events")
-        print(f"Combined {len(branches_name)} branches per event")
         
         return dataset
 
 class QUICK_FIT():
     """
-    contains methods for performing batch fits on datasets
+    Contains methods for performing batch fits on datasets with multi-dimensional binning support.
 
-    the fit function should take the following parameters:
-    #- should not have positional arguments, only keyword arguments
+    The fit function should take the following parameters:
     - tree: ROOT.TTree object containing the data to fit
     - output_file: str, path to save the fit results
     - log_file: str, path to save the log output
-    - range_use: tuple, (min, max) range for the fit
+    - range_use: str or tuple, range description for the fit
     - **kwargs: additional keyword arguments for flexibility
-    output to be: result, nsig, nsig_err
+    
+    Output: result, nsig, nsig_err
     """
 
     def __init__(self,
                  fit_function: Callable, 
-                 bin_var_config: Tuple[str, float, float, int], 
+                 bin_var_config: Optional[List[Tuple[str, float, float, int]]] = None,
                  tree_path: str = "",
                  output_dir: str = ""):
-
+        """
+        Args:
+            fit_function: Callable fit function
+            bin_var_config: List of tuples (var_name, min, max, nbins) for multi-dimensional binning
+                           If single tuple provided, will be converted to list for backward compatibility
+            tree_path: Path to input ROOT file
+            output_dir: Output directory for fit results
+        """
         self.fit_function = fit_function
-        self.bin_var_config = bin_var_config
-        self.output_dir = output_dir
+        
+        # Support backward compatibility: convert single tuple to list
+        if bin_var_config is not None:
+            if isinstance(bin_var_config, tuple) and len(bin_var_config) == 4:
+                self.bin_var_configs = [bin_var_config]
+            else:
+                self.bin_var_configs = bin_var_config
+        else:
+            self.bin_var_configs = []
+            
         self.tree_path = tree_path
+        self.output_dir = output_dir
+        
+        # Calculate total number of bins for multi-dimensional case
+        self.n_dimensions = len(self.bin_var_configs)
+        self.total_bins = 1
+        self.bins_per_dim = []
+        
+        for config in self.bin_var_configs:
+            n_bins = config[3]
+            self.bins_per_dim.append(n_bins)
+            self.total_bins *= n_bins
+            
+        print(f"Initialized {self.n_dimensions}D binning with {self.total_bins} total bins")
+        if self.n_dimensions > 1:
+            print(f"Bins per dimension: {self.bins_per_dim}")
 
-    def batch_fit(self, bins_to_fit:Optional[List[int]] = None , 
-                  branches_name:Optional[list[str]] = None,
+    def _get_bin_indices(self, flat_index: int) -> List[int]:
+        """
+        Convert flat bin index to multi-dimensional bin indices
+        
+        Args:
+            flat_index: Flat index in range [0, total_bins)
+            
+        Returns:
+            List of indices for each dimension
+        """
+        indices = []
+        remaining = flat_index
+        
+        for i in range(self.n_dimensions - 1, -1, -1):
+            n_bins = self.bins_per_dim[i]
+            indices.insert(0, remaining % n_bins)
+            remaining //= n_bins
+            
+        return indices
+
+    def _get_flat_index(self, indices: List[int]) -> int:
+        """
+        Convert multi-dimensional bin indices to flat index
+        
+        Args:
+            indices: List of indices for each dimension
+            
+        Returns:
+            Flat index
+        """
+        flat_index = 0
+        multiplier = 1
+        
+        for i in range(self.n_dimensions - 1, -1, -1):
+            flat_index += indices[i] * multiplier
+            multiplier *= self.bins_per_dim[i]
+            
+        return flat_index
+
+    def _get_bin_ranges(self, bin_indices: List[int]) -> List[Tuple[float, float]]:
+        """
+        Get the range for each dimension given bin indices
+        
+        Args:
+            bin_indices: List of bin indices for each dimension
+            
+        Returns:
+            List of (min, max) tuples for each dimension
+        """
+        ranges = []
+        
+        for dim_idx, bin_idx in enumerate(bin_indices):
+            var_name, min_val, max_val, n_bins = self.bin_var_configs[dim_idx]
+            bin_step = (max_val - min_val) / n_bins
+            
+            bin_min = min_val + bin_idx * bin_step
+            bin_max = min_val + (bin_idx + 1) * bin_step
+            
+            ranges.append((bin_min, bin_max))
+            
+        return ranges
+
+    def _format_bin_description(self, bin_indices: List[int], ranges: List[Tuple[float, float]]) -> str:
+        """
+        Create a readable description of the bin
+        
+        Args:
+            bin_indices: List of bin indices
+            ranges: List of (min, max) tuples
+            
+        Returns:
+            String description
+        """
+        descriptions = []
+        
+        for dim_idx, (bin_min, bin_max) in enumerate(ranges):
+            var_name = self.bin_var_configs[dim_idx][0]
+            descriptions.append(f"{var_name}[{bin_min:.3f},{bin_max:.3f}]")
+            
+        return "_".join(descriptions)
+
+    def batch_fit(self, bins_to_fit: Optional[List[int]] = None,
+                  branches_name: Optional[List[str]] = None,
                   additional_cut: str = ""):
-
+        """
+        Perform batch fitting with multi-dimensional binning support
+        
+        Args:
+            bins_to_fit: List of flat bin indices to fit. If None, fit all bins
+            branches_name: List of branch names to combine for fitting
+            additional_cut: Additional filter condition to apply
+        """
         start_time = time.time()
 
         tree_path = self.tree_path
@@ -196,136 +327,241 @@ class QUICK_FIT():
 
         os.makedirs(output_dir, exist_ok=True)
 
-        bin_var, min_val, max_val, nbin = self.bin_var_config
-        bin_step = (max_val - min_val) / nbin
-        #Nbin_tot = int(round((max_val - min_val) / nbin))
+        # Initialize results array: [bin_center_dim1, bin_center_dim2, ..., nsig, nsig_err, nsig_err]
+        results_columns = 2 * self.n_dimensions + 3  # centers + widths + nsig + 2*err
+        results = np.zeros((self.total_bins, results_columns))
 
-        results = np.zeros((nbin, 5)) #[bin_center, bin_width/2, nsig, msig_err, nsig_err]
-
-        # Initialize results file if it doesn't exist
+        # Initialize results file
         results_file = output_dir + "nsig_results.txt"
         if not os.path.isfile(results_file):
             with open(results_file, "w") as init_file:
-                for i in range(nbin):
+                for i in range(self.total_bins):
                     init_file.write("\n")
         else:
             try:
                 loaded_results = np.loadtxt(results_file)
-                if loaded_results.shape[0] >= nbin:
-                    results = loaded_results[:nbin]
+                if loaded_results.shape[0] >= self.total_bins:
+                    results = loaded_results[:self.total_bins]
                     print(f"Loaded existing results from {results_file}")
             except Exception as e:
                 print(f"Could not load existing results: {e}")
 
-        # Use provided bins or default to all bins
+        # Determine which bins to fit
         if bins_to_fit is None:
-            bins_to_fit = list(range(nbin))
+            bins_to_fit = list(range(self.total_bins))
 
-        # Check for valid bin numbers
-        bins_to_fit = [i for i in bins_to_fit if 0 <= i < nbin]
+        bins_to_fit = [i for i in bins_to_fit if 0 <= i < self.total_bins]
         if not bins_to_fit:
             print("No valid bins specified. Exiting.")
             return
-    
-        print(f"Will process {len(bins_to_fit)} bins: {bins_to_fit}")
 
-        #process each bin sequentially
+        print(f"Will process {len(bins_to_fit)} bins out of {self.total_bins} total bins")
+
+        # Detect variable types for all dimensions
+        test_df = ROOT.RDataFrame("event", tree_path)
+        bin_var_types = []
+        
+        for dim_idx, config in enumerate(self.bin_var_configs):
+            var_name = config[0]
+            try:
+                column_type = test_df.GetColumnType(var_name)
+                is_vector = "vector" in column_type.lower() or "rvec" in column_type.lower()
+                bin_var_types.append(is_vector)
+                
+                type_str = "vector" if is_vector else "scalar"
+                print(f"Dimension {dim_idx}: '{var_name}' is {type_str} type")
+                
+            except Exception as e:
+                print(f"Warning: Could not determine type of '{var_name}': {e}")
+                bin_var_types.append(False)
+
         successful_fits = 0
         failed_bins = []
 
-        for bin_i in bins_to_fit:
+        # Process each bin
+        for flat_bin_idx in bins_to_fit:
             try:
-                m_min = min_val + bin_i * bin_step
-                m_max = min_val + (bin_i + 1) * bin_step
-                range_cut = f"{bin_var} >= {m_min:.3f} && {bin_var} <= {m_max:.3f}"
-                range_use = f"({m_min:.3f},{m_max:.3f})"
+                # Convert flat index to multi-dimensional indices
+                bin_indices = self._get_bin_indices(flat_bin_idx)
+                ranges = self._get_bin_ranges(bin_indices)
+                
+                # Create bin description
+                bin_desc = self._format_bin_description(bin_indices, ranges)
+                range_use = "(" + ",".join([f"[{r[0]:.3f},{r[1]:.3f}]" for r in ranges]) + ")"
                 
                 print("-----------------------")
-                print(f"Processing bin {bin_i}: {range_cut}")
+                print(f"Processing bin {flat_bin_idx}: {bin_desc}")
+                print(f"Bin indices: {bin_indices}")
                 
-                # Create output file paths
-                bin_output = f"{output_dir}bin_{bin_i}" # output_dir/bin_i 
-                bin_log_file = f"{output_dir}bin_{bin_i}.log"
+                bin_output = f"{output_dir}bin_{flat_bin_idx}"
+                bin_log_file = f"{output_dir}bin_{flat_bin_idx}.log"
                 print(f"Log file: {bin_log_file}")
                 
+                # Create RDataFrame and apply cuts
                 rf = ROOT.RDataFrame("event", tree_path)
-                rf = rf.Filter(range_cut + additional_cut)
-                #rf = rf.Filter(range_cut )
-
-                temp_file_path = f"{output_dir}temp_bin_{bin_i}.root"
                 
+                # apply extra cut, if any
+                if additional_cut:
+                    rf = rf.Filter(additional_cut, "Additional cut")
+
+                # Apply cuts for all dimensions
+                bin_conditions = []
+                
+                for dim_idx, (bin_min, bin_max) in enumerate(ranges):
+                    var_name = self.bin_var_configs[dim_idx][0]
+                    is_vector = bin_var_types[dim_idx]
+                    
+                    condition = f"({var_name} >= {bin_min:.3f}) && ({var_name} <= {bin_max:.3f})"
+                    bin_conditions.append(condition)
+                    
+                    if is_vector:
+                        # For vector type: keep events with at least one element in range
+                        rf = rf.Filter(f"Any({condition})", f"Dim {dim_idx} has elements in range")
+                    else:
+                        # For scalar type: filter events directly
+                        rf = rf.Filter(condition, f"Dim {dim_idx} in range")
+
+                # Apply element filtering for vector branches
+                # All vector bin variables should use the same indexing logic
+                has_vector = any(bin_var_types)
+                
+                if has_vector:
+                    # Create combined condition for vector indexing
+                    # Use AND logic: element must be in range for ALL vector dimensions
+                    vector_conditions = [cond for dim_idx, cond in enumerate(bin_conditions) 
+                                        if bin_var_types[dim_idx]]
+                    combined_condition = " && ".join(vector_conditions)
+                    
+                    print(f"Combined vector filter: {combined_condition}")
+                    
+                    # apply selection to provided branches as well
+                    if branches_name:
+                        for branch_name in branches_name:
+                            try:
+                                branch_type = rf.GetColumnType(branch_name)
+                                if "vector" in branch_type.lower() or "rvec" in branch_type.lower():
+                                    rf = rf.Redefine(branch_name, f"{branch_name}[{combined_condition}]")
+                                    print(f"Filtered vector branch: {branch_name}")
+                            except Exception as e:
+                                print(f"Warning: Could not filter branch {branch_name}: {e}")
+                    
+                    """
+                    # not neccessary to filter vector bin variables again
+                    # Apply to all vector bin variables
+                    for dim_idx, config in enumerate(self.bin_var_configs):
+                        if bin_var_types[dim_idx]:
+                            var_name = config[0]
+                            rf = rf.Redefine(var_name, f"{var_name}[{combined_condition}]")
+                            print(f"Filtered vector bin variable: {var_name}")
+                    """
+
+                # Save filtered tree
+                temp_file_path = f"{output_dir}temp_bin_{flat_bin_idx}.root"
                 rf.Snapshot("event", temp_file_path)
+                
+                # Open the filtered tree
                 temp_file = ROOT.TFile.Open(temp_file_path)
                 filtered_tree = temp_file.Get("event")
 
-                # perform fit
+                # check if there are entries to fit
+                n_entries = filtered_tree.GetEntries()
+                print(f"Filtered tree has {n_entries} entries")
+                
+                if n_entries == 0:
+                    print(f"Warning: No entries in bin {flat_bin_idx}, skipping fit")
+                    failed_bins.append(flat_bin_idx)
+                    temp_file.Close()
+                    os.remove(temp_file_path)
+                    continue
+
+                # Perform fit
                 try:
-                    # Call fit_function with optional branches_name parameter
                     result, nsig, nsig_err = fit_function(
-                        filtered_tree, 
-                        bin_output, 
-                        bin_log_file, 
+                        filtered_tree,
+                        bin_output,
+                        bin_log_file,
                         range_use,
-                        branches_name = branches_name,
+                        branches_name=branches_name,
                     )
                     
-                    results[bin_i] = [m_min + bin_step/2, bin_step/2, nsig, nsig_err, nsig_err]
+                    # Store results: [bin_centers, bin_widths, nsig, nsig_err, nsig_err]
+                    result_row = []
                     
-                    print(f"signal yield: {nsig:.2f} ± {nsig_err:.2f}")
+                    for dim_idx, (bin_min, bin_max) in enumerate(ranges):
+                        bin_center = (bin_min + bin_max) / 2
+                        bin_width = (bin_max - bin_min) / 2
+                        result_row.extend([bin_center, bin_width])
+                    
+                    result_row.extend([nsig, nsig_err, nsig_err])
+                    results[flat_bin_idx] = result_row
+                    
+                    print(f"Signal yield: {nsig:.2f} ± {nsig_err:.2f}")
 
-                    # Convert status codes to a dictionary for better readability
-                    status_codes = {
-                        0: "successful fit",
-                        1: "covariance was made positive definite",
-                        2: "Hesse is invalid",
-                        3: "EDM is above max",
-                        4: "Reached call limit",
-                        5: "other failure"
-                    }
-                    
                     fit_status = result.status()
                     if fit_status == 0:
                         print("Fit converged successfully!")
                         successful_fits += 1
                     else:
-                        failed_bins.append(bin_i)
+                        status_codes = {
+                            0: "successful fit",
+                            1: "covariance was made positive definite",
+                            2: "Hesse is invalid",
+                            3: "EDM is above max",
+                            4: "Reached call limit",
+                            5: "other failure"
+                        }
+                        failed_bins.append(flat_bin_idx)
                         print(f"Fit had issues: {status_codes.get(fit_status, 'unknown error')}")
                     
                 except Exception as e:
-                    print(f"Error processing bin {bin_i}: {str(e)}")
+                    print(f"Error during fit for bin {flat_bin_idx}: {str(e)}")
+                    import traceback
+                    traceback.print_exc()
+                    failed_bins.append(flat_bin_idx)
                 
-                # Clean up memory
+                # Clean up
                 filtered_tree.Delete()
                 temp_file.Close()
-                os.remove(temp_file_path) 
+                os.remove(temp_file_path)
                 
-                    
             except Exception as e:
-                print(f"Error setting up bin {bin_i}: {str(e)}")
-        
-        # Save all results to file
+                print(f"Error setting up bin {flat_bin_idx}: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                failed_bins.append(flat_bin_idx)
+
+        # Save results
         with open(results_file, "w") as f:
-            for i in range(nbin):
-                f.write(f"{results[i][0]:.6f}  {results[i][1]:.6f}  {results[i][2]:.6f} {results[i][3]:.6f} {results[i][4]:.6f}\n")
-        
+            # Write header
+            header_parts = []
+            for dim_idx in range(self.n_dimensions):
+                var_name = self.bin_var_configs[dim_idx][0]
+                header_parts.extend([f"{var_name}_center", f"{var_name}_width"])
+            header_parts.extend(["nsig", "nsig_err", "nsig_err"])
+            f.write("# " + "  ".join(header_parts) + "\n")
+            
+            # Write data
+            for i in range(self.total_bins):
+                row_str = "  ".join([f"{val:.6f}" for val in results[i]])
+                f.write(row_str + "\n")
+
         end_time = time.time()
         
         print("-----------------------")
         print(f"Batch fitting complete! Successfully fit {successful_fits}/{len(bins_to_fit)} bins.")
-        if successful_fits < len(bins_to_fit):
+        if failed_bins:
             print(f"Failed bins: {failed_bins}")
         print(f"Total time: {end_time - start_time:.1f} seconds")
 
-
     def parse_arguments(self):
-        """
-        """
-        parser = argparse.ArgumentParser(description='general argument paeser for convenient fit')
-        parser.add_argument('--input', type=str, help='Input ROOT file')
-        parser.add_argument('--output_dir', type=str, default='./', help='Output dir')
+        """Parse command line arguments for multi-dimensional binning"""
+        parser = argparse.ArgumentParser(description='General argument parser for convenient fit')
+        parser.add_argument('--input', '-i', type=str, help='Input ROOT file')
+        parser.add_argument('--output_dir', '-od', type=str, default='./', help='Output directory')
         parser.add_argument('--batch', action='store_true', help='Run batch fitting')
-        parser.add_argument('--bins', type=str, help='Bins to fit (comma-separated list or range "start:end")')
-        parser.add_argument('--branches_name', type=str, 
+        parser.add_argument('--bins', type=str, 
+                          help='Bins to fit. For 1D: "0,1,2" or "0:10". For 2D+: flat indices "0,1,2" or "0:100"')
+        parser.add_argument('--branches_name', '-BrN', type=str,
                         help='Comma-separated list of branch names to combine (e.g., "phi1_M,phi2_M")')
         
         args = parser.parse_args()
@@ -333,14 +569,12 @@ class QUICK_FIT():
         self.tree_path = args.input
         self.output_dir = args.output_dir
 
-        # Parse branch names if provided
         branches_name = None
         if args.branches_name:
             branches_name = [name.strip() for name in args.branches_name.split(",")]
         print(f"Branch names to combine: {branches_name}")
 
         if args.batch:
-            # Parse bins from command line arguments if provided
             bins_to_fit = None
             
             if args.bins:
@@ -350,12 +584,12 @@ class QUICK_FIT():
                 else:
                     bins_to_fit = [int(x) for x in args.bins.split(",")]
                     
-            self.batch_fit( bins_to_fit, branches_name)
+            self.batch_fit(bins_to_fit, branches_name)
             
         elif args.input:
             file = ROOT.TFile(args.input, "READ")
-            tree = file.Get("event")  
-            self.fit_function(tree, args.output_dir, None, None, branches_name = branches_name)
+            tree = file.Get("event")
+            self.fit_function(tree, args.output_dir, None, None, branches_name=branches_name)
         else:
             print("Please provide an input file or use --batch mode")
 
@@ -369,6 +603,8 @@ class QUICK_FIT():
         style_draw([h_nsig], args.output_dir + "nsig.png")
         '''
 
+
+    ### below part not finished yet
     def perform_joint_fit(self, 
                      workspace1: ROOT.RooWorkspace, 
                      workspace2: ROOT.RooWorkspace,
