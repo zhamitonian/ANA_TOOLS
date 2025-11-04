@@ -1,6 +1,7 @@
 import ROOT
 import os
 import numpy as np
+from math import sqrt
 from typing import List, Dict, Tuple, Optional, Union, Any
 
 class HistStyle:
@@ -357,18 +358,31 @@ def style_draw(
     
     # Create and configure legend
     num_stats = num if show_stats else 0
-    
-    if legend_position == 0:  # left
-        legend = ROOT.TLegend(0.14, 0.9 - 0.16 * num_stats - 0.05 * num, 0.34, 0.9 - 0.16 * num_stats)
-    elif legend_position == 1:  # middle
-        legend = ROOT.TLegend(0.43, 0.9 - 0.16 * num_stats - 0.05 * num, 0.63, 0.9 - 0.16 * num_stats)
-    else:  # right (default)
-        legend = ROOT.TLegend(0.73, 0.9 - 0.16 * num_stats - 0.05 * num, 0.93, 0.9 - 0.16 * num_stats)
-    
+
+    area_scale = 1.5
+
+    top = 0.9 - 0.16 * num_stats
+    width = 0.2 * sqrt(area_scale)
+    height = (0.16 * num_stats + 0.05 * num) * sqrt(area_scale)
+
+    if legend_position == 0:  # left - anchor at top-left
+        left = 0.13
+        right = left + width
+    elif legend_position == 2:  # right - anchor at top-right
+        right = 0.13 + 0.3 * 2 + 0.2
+        left = right - width
+    else:  # center - anchor at top-center
+        center = 0.13 + 0.3 * 1 + 0.1
+        left = center - width/2
+        right = center + width/2
+
+    bottom = top - height
+
+    legend = ROOT.TLegend(left, bottom, right, top)
     legend.SetFillStyle(0)
     legend.SetBorderSize(0)
-    legend.SetTextSize(0.06)
-    
+    legend.SetTextSize(0.03 * area_scale)    
+
     # Add legend entries if provided
     if leg_texts:
         for i in range(min(num, len(leg_texts))):
@@ -407,7 +421,7 @@ def style_draw(
     if save and output_name:
         out_dir = os.path.dirname(output_name)
         if out_dir and not os.path.exists(out_dir):
-            print("Warning: Output directory does not exist, exit.")
+            print(f"Warning: Output directory [{out_dir}] does not exist, exit.")
             return pad if pad is not None else c
             #os.makedirs(out_dir, exist_ok=True)
         if output_name.endswith(".root"):

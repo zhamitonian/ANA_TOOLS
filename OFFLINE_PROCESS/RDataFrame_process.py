@@ -1008,7 +1008,201 @@ class RDF_process:
         
         return result_df
 
+    def calculate_pt_toAxis(self, df: ROOT.RDataFrame, particle:Tuple[str, str, str], axis: Tuple[str, str], 
+                            particle_name: str, axis_name:str) -> ROOT.RDataFrame:
+        """
+        Calculate pt relative to an axis, such as thrust axis.
+        Automatically handles both scalar and vector inputs.
+        """
+
+        # Define scalar version
+        func_name_scalar = "calculate_pt_toAxis_scalar"
+        if func_name_scalar not in RDF_process._defined_functions:
+            ROOT.gInterpreter.Declare("""
+                double calculate_pt_toAxis_scalar(
+                    double particle_px, double particle_py, double particle_pz,
+                    double axis_theta, double axis_phi) 
+                {
+                    TVector3 particle_vec(particle_px, particle_py, particle_pz);
+                    TVector3 axis_vec;
+                    axis_vec.SetMagThetaPhi(1.0, axis_theta, axis_phi);
+                    double pt_toAxis = particle_vec.Perp(axis_vec);
+                            
+                    return pt_toAxis;
+                }
+            """)
+            RDF_process._defined_functions.add(func_name_scalar)
+
+        # Define vector version
+        func_name_vec = "calculate_pt_toAxis_vec"
+        if func_name_vec not in RDF_process._defined_functions:
+            ROOT.gInterpreter.Declare("""
+                #include <ROOT/RVec.hxx>
+                using namespace ROOT::VecOps;
+                
+                RVec<double> calculate_pt_toAxis_vec(
+                    const RVec<double>& particle_px, 
+                    const RVec<double>& particle_py, 
+                    const RVec<double>& particle_pz,
+                    double axis_theta, double axis_phi) 
+                {
+                    TVector3 axis_vec;
+                    axis_vec.SetMagThetaPhi(1.0, axis_theta, axis_phi);
+                    
+                    RVec<double> pt_results;
+                    pt_results.reserve(particle_px.size());
+                    
+                    for (size_t i = 0; i < particle_px.size(); ++i) {
+                        TVector3 particle_vec(particle_px[i], particle_py[i], particle_pz[i]);
+                        double pt_toAxis = particle_vec.Perp(axis_vec);
+                        pt_results.push_back(pt_toAxis);
+                    }
+                    
+                    return pt_results;
+                }
+            """)
+            RDF_process._defined_functions.add(func_name_vec)
+
+        # Define automatic dispatcher
+        func_name_auto = "calculate_pt_toAxis_auto"
+        if func_name_auto not in RDF_process._defined_functions:
+            ROOT.gInterpreter.Declare("""
+                #include <ROOT/RVec.hxx>
+                using namespace ROOT::VecOps;
+                
+                // Overload for scalar inputs
+                auto calculate_pt_toAxis_auto(
+                    double particle_px, double particle_py, double particle_pz,
+                    double axis_theta, double axis_phi) 
+                {
+                    return calculate_pt_toAxis_scalar(particle_px, particle_py, particle_pz, 
+                                                      axis_theta, axis_phi);
+                }
+                
+                // Overload for vector inputs
+                auto calculate_pt_toAxis_auto(
+                    const RVec<double>& particle_px, 
+                    const RVec<double>& particle_py, 
+                    const RVec<double>& particle_pz,
+                    double axis_theta, double axis_phi) 
+                {
+                    return calculate_pt_toAxis_vec(particle_px, particle_py, particle_pz,
+                                                  axis_theta, axis_phi);
+                }
+            """)
+            RDF_process._defined_functions.add(func_name_auto)
+
+        # Use the automatic dispatcher
+        new_df = df.Define(
+            f"{particle_name}_pt_toAxis_{axis_name}",
+            f"calculate_pt_toAxis_auto({particle[0]}, {particle[1]}, {particle[2]}, {axis[0]}, {axis[1]})"
+        )
+
+        return new_df
+    
+    def save_all_pairs(self, df: ROOT.RDataFrame, 
+                            p1_branches: Tuple[str, str, str],
+                            p2_branches: Tuple[str, str, str],
+                            mass:Tuple[float, float],
+                            particle_name:Optional[Tuple[str, str, str]]=None) -> ROOT.RDataFrame:
+        """
+        Save all combinations of two particle from vector<double> branches.
+        For example, 3 K+ and 3 K- will generate 9 phi candidates.
+        
+        Parameters:
+        -----------
+        df : ROOT.RDataFrame
+            Input dataframe containing vector<double> branches for p1 and p2
+        Kp_branches : List[str]
+            Tuple of p1 momentum component branch names [px, py, pz]
+        Km_branches : List[str]
+            Tuple of p2 momentum component branch names [px, py, pz]
+        mass : Tuple[float, float]
+            Mass of two particles in GeV/c^2
+            
+        Returns:
+        --------
+        ROOT.RDataFrame: Updated dataframe with phi combination variables as vectors
+        """
+        new_df = df
+        
+        # Define the C++ function to calculate all combinations
+        func_name = "calculate_all_pairs"
+        if func_name not in self._defined_functions:
+            ROOT.gInterpreter.Declare(f"""
+                #include <ROOT/RVec.hxx>
+                #include <TLorentzVector.h>
+                using namespace ROOT::VecOps;
+                
+                  std::tuple<RVec<double>, RVec<double>, RVec<double>, RVec<double>, RVec<int>, RVec<int>>
+                  calculate_all_pairs(
+                    const RVec<double>& p1_px, const RVec<double>& p1_py, const RVec<double>& p1_pz,
+                    const RVec<double>& p2_px, const RVec<double>& p2_py, const RVec<double>& p2_pz,
+                    double mass_p1, double mass_p2) 
+                {{
+                    RVec<double> E;
+                    RVec<double> px;
+                    RVec<double> py;
+                    RVec<double> pz;
+                    RVec<int> p1_index;
+                    RVec<int> p2_index;
+                    
+                    // Loop over all p1 candidates
+                    for (size_t i = 0; i < p1_px.size(); ++i) {{
+                        TLorentzVector p1;
+                        p1.SetXYZM(p1_px[i], p1_py[i], p1_pz[i], mass_p1);
+                        
+                        // Loop over all p2 candidates
+                        for (size_t j = 0; j < p2_px.size(); ++j) {{
+                            TLorentzVector p2;
+                            p2.SetXYZM(p2_px[j], p2_py[j], p2_pz[j], mass_p2);
+                            
+                            // Form composite particle candidate
+                            TLorentzVector comp_p = p1 + p2;
+                            
+                            // Store all information
+                            E.push_back(comp_p.E());
+                            px.push_back(comp_p.Px());
+                            py.push_back(comp_p.Py());
+                            pz.push_back(comp_p.Pz());
+                            p1_index.push_back(i);
+                            p2_index.push_back(j);
+                        }}
+                    }}
+                    
+                    return std::make_tuple(E, px, py, pz, p1_index, p2_index);
+                }}
+            """)
+            self._defined_functions.add(func_name)
+        
+        # Define all phi combination variables
+        new_df = new_df.Define(
+            "Pairs",
+            f"calculate_all_pairs({p1_branches[0]}, {p1_branches[1]}, {p1_branches[2]}, "
+            f"{p2_branches[0]}, {p2_branches[1]}, {p2_branches[2]}, {mass[0]}, {mass[1]})"
+        )
+        
+        # Extract individual components as separate columns
+        names = particle_name if particle_name else ("comp_p","p1","p2")
+        variables = { "E": f"{names[0]}_E", 
+                     "px": f"{names[0]}_px", 
+                     "py": f"{names[0]}_py", 
+                     "pz": f"{names[0]}_pz", 
+                     "p1_index": f"{names[1]}_index", 
+                     "p2_index": f"{names[2]}_index"}
+                    
+        key_to_idx = {"E":0, "px":1, "py":2, "pz":3, "p1_index":4, "p2_index":5}
+                    
+        for key, branch in variables.items():
+            idx = key_to_idx[key]
+            new_df = new_df.Define(branch, f"std::get<{idx}>(Pairs)")
+
+        return new_df
 
 
-         
+
+
+
+
+
 

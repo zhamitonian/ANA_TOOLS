@@ -30,8 +30,8 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
     """
     reso, mass, width = "phi", 1.0195, 0.004249
 
-    #x_min, x_max, nbin = 0.986, 1.06, 37# for argus , kk threshold 0.98736
-    x_min, x_max, nbin = 1, 1.06, 30
+    x_min, x_max, nbin = 0.987, 1.145, 158# for argus , kk threshold 0.98736
+    #x_min, x_max, nbin = 1, 1.045, 45
 
     var_config = [("phi_M", x_min, x_max)]  
     tools = FIT_UTILS(log_file=log_file, var_config= var_config)
@@ -62,14 +62,14 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
         
         # Use Breit-Wigner (RooBreitWigner) with PDG values for phi meson
         w.factory(f"BreitWigner::reso_bw({reso}_M, {mass}, {width})")
-        #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.0008, 0.0002, 0.0014])")
-        w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.00083])")
+        w.factory(f"Gaussian::smear({reso}_M, smear_mean[0, -0.0001, 0.0001], smear_sigma[0.0008, 0.0002, 0.0014])")
+        #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.00083])")
         w.factory(f"FCONV::sig_pdf({reso}_M, reso_bw, smear)")
         
         # Polynomial, Chebychev, ArgusBG, or reversed Argus background PDF selection
-        which_bkg = kwargs.get("which_bkg", 3)  # 0: Chebychev, 1: Polynomial, 2: ArgusBG, 3: reversed Argus
-        bkg_order = kwargs.get("bkg_order", 1)  # Order of polynomial/Chebychev (default: 1)
-        bkg_funcs = ["Chebychev", "Polynomial", "ArgusBG", "revArgus", "custom"]
+        which_bkg = kwargs.get("which_bkg", 5)  # 0: Chebychev, 1: Polynomial, 2: ArgusBG, 3: reversed Argus 
+        bkg_order = kwargs.get("bkg_order", 2)  # Order of polynomial/Chebychev (default: 1)
+        bkg_funcs = ["Chebychev", "Polynomial", "ArgusBG", "revArgus", "custom", "custom2"]
         bkg_func = bkg_funcs[which_bkg]
 
         if bkg_func in ["Chebychev", "Polynomial"]:
@@ -95,6 +95,14 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
             w.factory("b[0.5, -10, 10]")
             w.factory("c[-1, -100, 100]")
             w.factory(f"RooGenericPdf::bkg_pdf('{formula}', {{{reso}_M, m0, a, b, c}})")
+        elif bkg_func == "custom2":
+            formula = f"pow(a + b*({reso}_M - m0), c + d*({reso}_M - m0))"
+            w.factory(f"m0[0.986]")
+            w.factory("a[1, -10000, 100000]")
+            w.factory("b[0.5, -10, 10]")
+            w.factory("c[1, -100, 100]")
+            w.factory("d[0.1, -10, 10]")
+            w.factory(f"RooGenericPdf::bkg_pdf('{formula}', {{{reso}_M, m0, a, b, c, d}})")
 
         w.factory("SUM::model(nsig[20000, 0, 40000] * sig_pdf, nbkg[45000, 0, 200000] * bkg_pdf)")
 
@@ -984,7 +992,7 @@ def get_effCurve(h_eff: ROOT.TH1, plot_path: str) -> ROOT.TH1:
     """
     h_eff_update = h_eff.Clone("h_eff_fit")
     # Create a polynomial fit function (5th order polynomial)
-    fit_func = ROOT.TF1("eff_fit_func", "pol5", h_eff.GetXaxis().GetXmin(), h_eff.GetXaxis().GetXmax())
+    fit_func = ROOT.TF1("eff_fit_func", "pol3", h_eff.GetXaxis().GetXmin(), h_eff.GetXaxis().GetXmax())
     
     # Fit the histogram
     fit_result = h_eff.Fit(fit_func, "SQR")  # S to return fit result, Q for quiet, R for range
