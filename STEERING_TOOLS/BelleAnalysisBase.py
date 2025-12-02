@@ -187,25 +187,25 @@ class BelleAnalysisBase:
             from b2biiConversion import convertBelleMdstToBelleIIMdst
             
             # Use Belle I to Belle II conversion
-#            convertBelleMdstToBelleIIMdst(
-#                input_file, 
-#                enableNisKsFinder=False, 
-#                enableEvtcls=True, 
-#                HadronA=False, 
-#                HadronB=False, 
-#                path=path
-#            )
             convertBelleMdstToBelleIIMdst(
                 input_file, 
-                applySkim=False, 
-                useBelleDBServer=None, 
-                convertBeamParameters=True,
-                generatorLevelReconstruction=False, generatorLevelMCMatching=False, entrySequences=None,
-                matchType2E9oE25Threshold=-1.1, enableNisKsFinder=True, HadronA=True, HadronB=True,
-                #matchType2E9oE25Threshold=1e10, enableNisKsFinder=True, HadronA=True, HadronB=True,
-                enableRecTrg=False, enableEvtcls=True, SmearTrack=2, enableLocalDB=True,
-                path=path)
-            
+                enableNisKsFinder=False, 
+                enableEvtcls=True, 
+                HadronA=False, 
+                HadronB=False, 
+                path=path
+            )
+#           convertBelleMdstToBelleIIMdst(
+#               input_file, 
+#               applySkim=False, 
+#               useBelleDBServer=None, 
+#               convertBeamParameters=True,
+#               generatorLevelReconstruction=False, generatorLevelMCMatching=False, entrySequences=None,
+#               matchType2E9oE25Threshold=-1.1, enableNisKsFinder=True, HadronA=True, HadronB=True,
+#               #matchType2E9oE25Threshold=1e10, enableNisKsFinder=True, HadronA=True, HadronB=True,
+#               enableRecTrg=False, enableEvtcls=True, SmearTrack=2, enableLocalDB=True,
+#               path=path)
+#           
             self.has_initialized_conversion = True
             return True
         elif not self.has_initialized_conversion:

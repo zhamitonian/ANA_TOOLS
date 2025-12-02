@@ -8,7 +8,7 @@ import os
 import time
 import math
 from contextlib import contextmanager
-from typing import Optional
+from typing import Optional, Union
 from array import array
 from DRAW import style_draw
 from PHY_CALCULATOR import PhysicsCalculator
@@ -16,30 +16,29 @@ from .fit_tools import FIT_UTILS, QUICK_FIT
 
 from math import sqrt
 
-def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str]=None, bin_fit_range:Optional[str]=None, joint_fit:bool=False, **kwargs):
+def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Optional[str]=None, bin_fit_range:Optional[str]=None, binned_fit = False,joint_fit:bool=False, **kwargs):
     """
     Perform sPlot analysis for digamma to diphi process
     
     Args:
-        tree: Input ROOT TTree with the data
+        input_tree: Input ROOT TTree with the data
         output_dir: Output directory for plots and results
         log_file: Optional file to save logs (stdout and stderr)
         bin_fit_range: Optional string representing the bin range for fitting
+        binned_fit: Whether to perform binned fit or unbinned fit
         **kwargs: Additional keyword arguments:
             branches_name: List of branch names to combine (e.g., ["phi1_M", "phi2_M"])
     """
     reso, mass, width = "phi", 1.0195, 0.004249
 
-    x_min, x_max, nbin = 0.987, 1.145, 158# for argus , kk threshold 0.98736
-    #x_min, x_max, nbin = 1, 1.045, 45
+    #x_min, x_max, nbin = 0.99, 1.15, 100 # ralf siedl  
+    x_min, x_max, nbin = 1, 1.06, 60
 
     var_config = [("phi_M", x_min, x_max)]  
     tools = FIT_UTILS(log_file=log_file, var_config= var_config)
 
-    #print(kwargs)
-    branches_name = kwargs['branches_name']
-    #print(f"Branch names {branches_name}")
-
+    branches_name = kwargs.get('branches_name', None)
+    print(f"binned_fit: { binned_fit}")
     # redirect log
     with tools.redirect_output():
         # Add some useful information at the beginning of the log
@@ -52,22 +51,34 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
         
         w = ROOT.RooWorkspace("w", "workspace")
         
-        #dataset = tools.handle_dataset(tree, w, branches_name, True if bin_fit_range is None else False)
-        dataset = tools.handle_dataset(tree, w, branches_name, False)
+        dataset = tools.handle_dataset(input_tree, w, branches_name, binned_fit, nbin )
         # Save dataset to workspace
         w.Import(dataset, ROOT.RooFit.Rename("dataset"))
 
-        print(tree.GetEntries())
+        print(input_tree.GetEntries())
         print(f"Dataset created with {dataset.numEntries()} entries")
         
-        # Use Breit-Wigner (RooBreitWigner) with PDG values for phi meson
-        w.factory(f"BreitWigner::reso_bw({reso}_M, {mass}, {width})")
-        w.factory(f"Gaussian::smear({reso}_M, smear_mean[0, -0.0001, 0.0001], smear_sigma[0.0008, 0.0002, 0.0014])")
-        #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.00083])")
-        w.factory(f"FCONV::sig_pdf({reso}_M, reso_bw, smear)")
+        # BW 
+        #w.factory(f"BreitWigner::reso_bw({reso}_M, {mass}, {width})")
+        #w.factory(f"BreitWigner::reso_bw({reso}_M, mass[{mass}, 1.01, 1.03], width[{width}, 0.001, 0.01])")
+        w.factory(f"BreitWigner::sig_pdf({reso}_M, mass[{mass}, 1.01, 1.03], width[{width}, 0.001, 0.01])")
+
+        # rela BW
+        #formula = f"({mass} * {width}) / (pow({reso}_M*{reso}_M - {mass}*{mass}, 2) + pow({mass}*{width}, 2))"
+        #w.factory(f"RooGenericPdf::reso_bw('{formula}', {{{reso}_M}})")
+
+        #from .relativistic_breit_wigner import define_relativistic_breit_wigner
+        #define_relativistic_breit_wigner(w, reso, mass, width)
+
+        #from .__helper_functions import define_relativistic_breit_wigner
+        #define_relativistic_breit_wigner(w, reso, mass, width)
+
+        #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0, -0.0001, 0.0001], smear_sigma[0.0008, 0.0002, 0.0014])")
+        w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.00083, 0.0002, 0.0014])")
+        #w.factory(f"FCONV::sig_pdf({reso}_M, reso_bw, smear)")
         
         # Polynomial, Chebychev, ArgusBG, or reversed Argus background PDF selection
-        which_bkg = kwargs.get("which_bkg", 5)  # 0: Chebychev, 1: Polynomial, 2: ArgusBG, 3: reversed Argus 
+        which_bkg = kwargs.get("which_bkg", 0)  # 0: Chebychev, 1: Polynomial, 2: ArgusBG, 3: reversed Argus 
         bkg_order = kwargs.get("bkg_order", 2)  # Order of polynomial/Chebychev (default: 1)
         bkg_funcs = ["Chebychev", "Polynomial", "ArgusBG", "revArgus", "custom", "custom2"]
         bkg_func = bkg_funcs[which_bkg]
@@ -82,29 +93,28 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
         elif bkg_func == "revArgus":
             # Reversed Argus: (m0-m) instead of (m-m0)
             argus_formula = f"({reso}_M / rev_m0) * pow(1 - pow(rev_m0/{reso}_M, 2), rev_p) * exp(rev_c * (1 - pow(rev_m0/{reso}_M, 2)))"
-            #w.factory(f"rev_m0[{x_min}]")
-            w.factory(f"rev_m0[0.986]")
+            w.factory(f"rev_m0[{x_min}]")
             w.factory("rev_c[-20, -100, -0.01]")
             w.factory("rev_p[0.5, 0, 1]")
             w.factory(f"RooGenericPdf::bkg_pdf('{argus_formula}', {{{reso}_M, rev_m0, rev_c, rev_p}})")
         elif bkg_func == "custom":
             formula = f"a*pow({reso}_M - m0, b)* exp(c * ({reso}_M - m0))"
             #w.factory(f"m0[{x_min}]")
-            w.factory(f"m0[0.986]")
+            w.factory(f"m0[{x_min}]")
             w.factory("a[1, -10000, 100000]")
             w.factory("b[0.5, -10, 10]")
             w.factory("c[-1, -100, 100]")
             w.factory(f"RooGenericPdf::bkg_pdf('{formula}', {{{reso}_M, m0, a, b, c}})")
         elif bkg_func == "custom2":
             formula = f"pow(a + b*({reso}_M - m0), c + d*({reso}_M - m0))"
-            w.factory(f"m0[0.986]")
+            w.factory(f"m0[{x_min}]")
             w.factory("a[1, -10000, 100000]")
             w.factory("b[0.5, -10, 10]")
             w.factory("c[1, -100, 100]")
             w.factory("d[0.1, -10, 10]")
             w.factory(f"RooGenericPdf::bkg_pdf('{formula}', {{{reso}_M, m0, a, b, c, d}})")
 
-        w.factory("SUM::model(nsig[20000, 0, 40000] * sig_pdf, nbkg[45000, 0, 200000] * bkg_pdf)")
+        w.factory("SUM::model(nsig[20000, 0, 400000] * sig_pdf, nbkg[45000, 0, 200000] * bkg_pdf)")
 
         # Perform fit
         model = w.pdf("model")
@@ -133,7 +143,8 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
 
 
         # --------------------------------------- splot ---------------------------------------
-        if bin_fit_range is None:
+        # sPlot only for unbinned fits
+        if not binned_fit:
             # Create sPlot for visualization using phi_M  as discriminating variables
             sData = RooStats.SPlot("sData", "sPlot", dataset, model,
                                 ROOT.RooArgList(w.var("nsig"), w.var("nbkg")))
@@ -211,7 +222,13 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
             
             framex.Draw()
 
-            leg = ROOT.TLegend(0.75, 0.9 - 0.05*5, 0.95, 0.9)
+            leg_ysize = 7
+            if bin_fit_range:
+                ranges = bin_fit_range.split(';')
+                leg_ysize += len(ranges)
+
+            #leg = ROOT.TLegend(0.75, 0.9 - 0.05*5, 0.95, 0.9)
+            leg = ROOT.TLegend(0.7, 0.9 - 0.05*leg_ysize, 0.95, 0.9)
             leg.SetBorderSize(0)
             leg.SetFillStyle(0)
             leg.SetFillColor(0)
@@ -251,28 +268,27 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
             # Calculate chi-square
             chi2_val = chi2 * ndf
             
-            unbinned = kwargs.get('unbinned', True)
-            if unbinned:
-                pass
-                # 对于unbinned拟合，显示NLL值
-                nll = result.minNll()
-                leg.AddEntry(0, f"NLL = {nll:.1f}", "")
+            # Show appropriate goodness-of-fit measure
+            if binned_fit:
+                # For binned fit, show chi2/ndf
+                leg.AddEntry(0, "#chi^{2}/ndf = " + f"{chi2_val:.1f}/{ndf}", "")
             else:
-                # 对于binned拟合，保留原有的χ²/ndof显示
-                chi2 = framex.chiSquare("sum", "data")  # Get reduced chi-square
-                data_hist = framex.getHist("data")
-                nBins = data_hist.GetN()
-                nPars = result.floatParsFinal().getSize()
-                ndf = nBins - nPars
+                # For unbinned fit, show both (chi2 is less meaningful but still shown)
                 chi2_val = chi2 * ndf
                 leg.AddEntry(0, "#chi^{2}/ndf = " + f"{chi2_val:.1f}/{ndf}", "")
+                # Could also show NLL for unbinned:
+                # nll = result.minNll()
+                # leg.AddEntry(0, f"NLL = {nll:.1f}", "")
 
-            leg.AddEntry(0, "N_{sig}=" + f"{w.var('nsig').getVal():.1f} #pm {w.var('nsig').getError():.1f}", "")
+            leg.AddEntry(0, "N_{sig} = " + f"{w.var('nsig').getVal():.1f} #pm {w.var('nsig').getError():.1f}", "")
             #leg.AddEntry(0, "#sigma_{gauss} = " + f"{w.var('smear_sigma').getVal():.2e} #pm {w.var('smear_sigma').getError():.2e}", "")
             leg.AddEntry(0, "#sigma_{gauss} = " + f"{(w.var('smear_sigma').getVal()*1000):.2f} #pm {(w.var('smear_sigma').getError()*1000):.2f} MeV", "")
 
             if bin_fit_range:
-                leg.AddEntry(0, f"Bin: {bin_fit_range}", "")
+                # Add each dimension on a separate line
+                for range_str in ranges:
+                    range_str = range_str.strip()
+                    leg.AddEntry(0, f"{range_str}", "")
             leg.Draw()
 
             pad2 = canvas.cd(2)
@@ -306,13 +322,13 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
 
         plot(f"{reso}_M")
 
-
         #return w, result, sData
         nsig = w.var("nsig").getVal()
         nsig_err = w.var("nsig").getError()
                 
         # Add summary at the end of the log
         print(f"=== Analysis Complete ===")
+        print(f"Fit type: {'Binned (histogram)' if binned_fit else 'Unbinned (tree)'}")
         print(f"Signal yield: {nsig:.2f} ± {nsig_err:.2f}")
         print(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"========================")
