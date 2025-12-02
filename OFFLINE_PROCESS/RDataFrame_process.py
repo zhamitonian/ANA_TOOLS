@@ -747,7 +747,7 @@ class RDF_process:
             Data dataframe for reference distribution 
         h_data : Optional[ROOT.TH1]
             Data histogram (alternative to providing data_df) , the hist's name should be the variable name
-        simple_Scale : bool
+        simple_Scale: bool
             Whether to normalize histograms before calculating weights
             
         Returns:
@@ -807,77 +807,72 @@ class RDF_process:
         
         return df_weighted
 
-    def calculate_HelicityAngle(self, df: ROOT.RDataFrame, particle_pair: Tuple[str,str], inter_p:Optional[str], other_particle:Optional[List[str]] = None) -> ROOT.RDataFrame:
+    def calculate_HelicityAngle(self, df: ROOT.RDataFrame, 
+                comp_branches: Tuple[str, str, str, str], 
+                daughter_branches: Tuple[str, str, str, str], 
+                particle_names: Tuple[str, str]) -> ROOT.RDataFrame:
         """
-        Calculate helicity angles according to the definition:
-        1. In the rest frame of the intermediate particle, the angle between 
-        the daughter particle momentum and the intermediate particle momentum 
-        direction in the CMS frame.
-        2. The angle between two decay planes in the CMS frame.
+        Calculate helicity angle: In the rest frame of the composite particle, 
+        the angle between the daughter particle momentum and the composite particle 
+        momentum direction in the CMS frame.
         
         Parameters:
         -----------
         df : ROOT.RDataFrame
             Input dataframe
-        particle_pair : Tuple[str,str]
-            Name of the two particle pairs, e.g. ("phikp", "phikm")
-        inter_p : str
-            Name of the intermediate particle, e.g. "Kstar"
-        other_particle : Optional[List[str]]
-            List of other final state particles, used for ee cms variables calculation
+        comp_branches : Tuple[str, str, str, str]
+            Composite particle momentum branches (px, py, pz, E) in CMS frame
+        daughter_branches : Tuple[str, str, str, str]
+            Daughter particle momentum branches (px, py, pz, E) in CMS frame
+        particle_names : Tuple[str, str]
+            Names for (composite_particle, daughter_particle)
             
         Returns:
         --------
-        ROOT.RDataFrame: Updated dataframe with helicity angles
+        ROOT.RDataFrame: Updated dataframe with helicity angle
         """
-        # Correctly unpack the nested tuples
-        (p1, p2) = particle_pair
-        new_df = df
-
-        # Define intermediate particle 1 ,2 variables 
-        if f"{inter_p}_E" not in new_df.GetColumnNames():
-            for comp in ["E", "px", "py", "pz"]:
-                new_df = new_df.Define(f"{inter_p}_{comp}", f"{p1}_{comp} + {p2}_{comp}")
-
-        new_df = self.set_CMS_variables(new_df,
-                                        FSPs=[p1, p2] + (other_particle if other_particle else []),
-                                        particles=[p1, p2, inter_p],
-                                        prefix="ee",
-                                        var2save=["E", "px", "py", "pz", "p", "pt", "theta", "phi"])
-        new_df = self.set_CMS_variables(new_df,
-                                        FSPs=[p1, p2],
-                                        particles=[p1, p2],
-                                        prefix=inter_p,
-                                        var2save=["px", "py", "pz"])
-
-        func_name = "calculate_helicity_angles"
-        if func_name not in RDF_process._defined_functions:
-            ROOT.gInterpreter.Declare("""
-                double calculate_helicity_angles(
-                    double interp_ee_cms_px , double interp_ee_cms_py, double interp_ee_cms_pz,
-                    double p1_inter_p_cms_px, double p1_inter_p_cms_py, double p1_inter_p_cms_pz
-                ) {
-                    TVector3 inter_p( interp_ee_cms_px, interp_ee_cms_py, interp_ee_cms_pz);
-                    TVector3 p1( p1_inter_p_cms_px, p1_inter_p_cms_py, p1_inter_p_cms_pz);
-                    
-                    inter_p = inter_p.Unit();
-                    p1 = p1.Unit();
-
-                    double cos_helicity_angle = inter_p.Dot(p1);
-
-                    double result = cos_helicity_angle;
-                    
-                    return result; 
-                    
-                    }
-
-                """)    
-            RDF_process._defined_functions.add(func_name)
-
-        new_df = new_df.Define(f"cosHelicity_{inter_p}_{p1}",
-                            f"calculate_helicity_angles({inter_p}_ee_cms_px,{inter_p}_ee_cms_py,{inter_p}_ee_cms_pz,"
-                            f"{p1}_ee_cms_px,{p1}_ee_cms_py,{p1}_ee_cms_pz)")
+        comp_name, daughter_name = particle_names
         
+        # Define scalar version
+        func_name_scalar = "calculate_helicity_angle"
+        if func_name_scalar not in RDF_process._defined_functions:
+            ROOT.gInterpreter.Declare("""
+                #include <TVector3.h>
+                #include <TLorentzVector.h>
+                
+                double calculate_helicity_angle_scalar(
+                    double comp_px, double comp_py, double comp_pz, double comp_E,
+                    double daughter_px, double daughter_py, double daughter_pz, double daughter_E) 
+                {
+                    // Create 4-vectors for composite and daughter particles in CMS frame
+                    TLorentzVector comp_cms(comp_px, comp_py, comp_pz, comp_E);
+                    TLorentzVector daughter_cms(daughter_px, daughter_py, daughter_pz, daughter_E);
+                    
+                    // Boost daughter to composite rest frame
+                    TVector3 boost_vec = comp_cms.BoostVector();
+                    TLorentzVector daughter_rest = daughter_cms;
+                    daughter_rest.Boost(-boost_vec);
+                    
+                    // Get momentum direction of composite in CMS frame
+                    TVector3 comp_dir = comp_cms.Vect().Unit();
+                    
+                    // Get momentum direction of daughter in composite rest frame
+                    TVector3 daughter_dir = daughter_rest.Vect().Unit();
+                    
+                    // Calculate cosine of helicity angle
+                    double cos_helicity = comp_dir.Dot(daughter_dir);
+                    
+                    return cos_helicity;
+                }
+            """)
+            RDF_process._defined_functions.add(func_name_scalar)
+
+            new_df = df.Define(
+            f"cos_helicity_{comp_name}_{daughter_name}",
+            f"calculate_helicity_angle({comp_branches[0]}, {comp_branches[1]}, {comp_branches[2]}, {comp_branches[3]}, "
+            f"{daughter_branches[0]}, {daughter_branches[1]}, {daughter_branches[2]}, {comp_branches[3]} )"
+        )
+
         return new_df
 
 
@@ -1013,6 +1008,20 @@ class RDF_process:
         """
         Calculate pt relative to an axis, such as thrust axis.
         Automatically handles both scalar and vector inputs.
+        Output branch would be: {particle_name}_{axis_name}_pt
+
+        Parameters:
+        -----------
+        df : ROOT.RDataFrame
+            Input dataframe
+        particle : Tuple[str, str, str]
+            Tuple of particle momentum component branch names (px, py, pz)
+        axis : Tuple[str, str]
+            Tuple of axis direction branch names (theta, phi)
+        particle_name : str
+            Name of the particle for naming the output branch
+        axis_name : str
+            Name of the axis for naming the output branch
         """
 
         # Define scalar version
@@ -1094,93 +1103,176 @@ class RDF_process:
 
         # Use the automatic dispatcher
         new_df = df.Define(
-            f"{particle_name}_pt_toAxis_{axis_name}",
+            f"{particle_name}_{axis_name}_pt",
             f"calculate_pt_toAxis_auto({particle[0]}, {particle[1]}, {particle[2]}, {axis[0]}, {axis[1]})"
         )
 
         return new_df
-    
+
     def save_all_pairs(self, df: ROOT.RDataFrame, 
-                            p1_branches: Tuple[str, str, str],
-                            p2_branches: Tuple[str, str, str],
-                            mass:Tuple[float, float],
-                            particle_name:Optional[Tuple[str, str, str]]=None) -> ROOT.RDataFrame:
+                        p1_branches: Tuple[str, str, str],
+                        p2_branches: Tuple[str, str, str],
+                        mass:Tuple[float, float],
+                        particle_name:Optional[Tuple[str, str, str]]=None,
+                        cross_mode:bool= True) -> ROOT.RDataFrame:
         """
         Save all combinations of two particle from vector<double> branches.
-        For example, 3 K+ and 3 K- will generate 9 phi candidates.
-        
+    
         Parameters:
         -----------
         df : ROOT.RDataFrame
             Input dataframe containing vector<double> branches for p1 and p2
-        Kp_branches : List[str]
+        p1_branches : Tuple[str, str, str]
             Tuple of p1 momentum component branch names [px, py, pz]
-        Km_branches : List[str]
+        p2_branches : Tuple[str, str, str]
             Tuple of p2 momentum component branch names [px, py, pz]
         mass : Tuple[float, float]
-            Mass of two particles in GeV/c^2
-            
+            Mass of two particles in GeV/c^2 (mass_p1, mass_p2)
+        particle_name : Optional[Tuple[str, str, str]]
+            Names for (composite_particle, particle1, particle2)
+        cross_mode : bool
+            If True, perform full cross combinations (i,j loop)
+            If False, only pair same indices (i=j)
+        
         Returns:
         --------
-        ROOT.RDataFrame: Updated dataframe with phi combination variables as vectors
+        ROOT.RDataFrame: Updated dataframe with combination variables as vectors
         """
         new_df = df
-        
-        # Define the C++ function to calculate all combinations
-        func_name = "calculate_all_pairs"
-        if func_name not in self._defined_functions:
-            ROOT.gInterpreter.Declare(f"""
-                #include <ROOT/RVec.hxx>
-                #include <TLorentzVector.h>
-                using namespace ROOT::VecOps;
+    
+        # Define different C++ functions for two modes
+        if cross_mode:
+            func_name = "calculate_all_pairs_cross"
+            if func_name not in self._defined_functions:
+                ROOT.gInterpreter.Declare(f"""
+                    #include <ROOT/RVec.hxx>
+                    #include <TLorentzVector.h>
+                    using namespace ROOT::VecOps;
                 
-                  std::tuple<RVec<double>, RVec<double>, RVec<double>, RVec<double>, RVec<int>, RVec<int>>
-                  calculate_all_pairs(
-                    const RVec<double>& p1_px, const RVec<double>& p1_py, const RVec<double>& p1_pz,
-                    const RVec<double>& p2_px, const RVec<double>& p2_py, const RVec<double>& p2_pz,
-                    double mass_p1, double mass_p2) 
-                {{
-                    RVec<double> E;
-                    RVec<double> px;
-                    RVec<double> py;
-                    RVec<double> pz;
-                    RVec<int> p1_index;
-                    RVec<int> p2_index;
+                    std::tuple<RVec<double>, RVec<double>, RVec<double>, RVec<double>, RVec<double>, RVec<int>, RVec<int>>
+                    calculate_all_pairs_cross(
+                        const RVec<double>& p1_px, const RVec<double>& p1_py, const RVec<double>& p1_pz,
+                        const RVec<double>& p2_px, const RVec<double>& p2_py, const RVec<double>& p2_pz,
+                        double mass_p1, double mass_p2) 
+                    {{
+                        RVec<double> E;
+                        RVec<double> px;
+                        RVec<double> py;
+                        RVec<double> pz;
+                        RVec<double> helicity_angles;
+                        RVec<int> p1_index;
+                        RVec<int> p2_index;
                     
-                    // Loop over all p1 candidates
-                    for (size_t i = 0; i < p1_px.size(); ++i) {{
-                        TLorentzVector p1;
-                        p1.SetXYZM(p1_px[i], p1_py[i], p1_pz[i], mass_p1);
+                        // Full cross combination: Loop over all p1 and p2 candidates
+                        for (size_t i = 0; i < p1_px.size(); ++i) {{
+                            TLorentzVector p1;
+                            p1.SetXYZM(p1_px[i], p1_py[i], p1_pz[i], mass_p1);
                         
-                        // Loop over all p2 candidates
-                        for (size_t j = 0; j < p2_px.size(); ++j) {{
-                            TLorentzVector p2;
-                            p2.SetXYZM(p2_px[j], p2_py[j], p2_pz[j], mass_p2);
+                            // Loop over all p2 candidates (full cross product)
+                            for (size_t j = 0; j < p2_px.size(); ++j) {{
+                                TLorentzVector p2;
+                                p2.SetXYZM(p2_px[j], p2_py[j], p2_pz[j], mass_p2);
                             
+                                // Form composite particle candidate
+                                TLorentzVector comp_p = p1 + p2;
+
+                                // Calculate helicity angle
+                                TVector3 comp_dir = comp_p.Vect().Unit();
+                                TVector3 boost_vec = comp_p.BoostVector();
+                                TLorentzVector p1_rest = p1;
+                                p1_rest.Boost(-boost_vec);
+                                TVector3 p1_dir = p1_rest.Vect().Unit();
+                                double cos_helicity = comp_dir.Dot(p1_dir);
+                                helicity_angles.push_back(cos_helicity);
+
+                                // Store all information
+                                E.push_back(comp_p.E());
+                                px.push_back(comp_p.Px());
+                                py.push_back(comp_p.Py());
+                                pz.push_back(comp_p.Pz());
+                                p1_index.push_back(i);
+                                p2_index.push_back(j);
+                            }}
+                        }}
+                    
+                        return std::make_tuple(E, px, py, pz, helicity_angles, p1_index, p2_index);
+                    }}
+                """)
+                self._defined_functions.add(func_name)
+        
+            call_func = func_name
+        else:
+            func_name = "calculate_all_pairs_same"
+            if func_name not in self._defined_functions:
+                ROOT.gInterpreter.Declare(f"""
+                    #include <ROOT/RVec.hxx>
+                    #include <TLorentzVector.h>
+                    using namespace ROOT::VecOps;
+                
+                    std::tuple<RVec<double>, RVec<double>, RVec<double>, RVec<double>, RVec<double>, RVec<int>, RVec<int>>
+                    calculate_all_pairs_same(
+                        const RVec<double>& p1_px, const RVec<double>& p1_py, const RVec<double>& p1_pz,
+                        const RVec<double>& p2_px, const RVec<double>& p2_py, const RVec<double>& p2_pz,
+                        double mass_p1, double mass_p2) 
+                    {{
+                        RVec<double> E;
+                        RVec<double> px;
+                        RVec<double> py;
+                        RVec<double> pz;
+                        RVec<double> helicity_angles;
+                        RVec<int> p1_index;
+                        RVec<int> p2_index;
+                    
+                        // Same index pairing: only i=j
+                        size_t n = std::min(p1_px.size(), p2_px.size());
+                        for (size_t i = 0; i < n; ++i) {{
+                            TLorentzVector p1;
+                            p1.SetXYZM(p1_px[i], p1_py[i], p1_pz[i], mass_p1);
+                        
+                            TLorentzVector p2;
+                            p2.SetXYZM(p2_px[i], p2_py[i], p2_pz[i], mass_p2);
+                        
                             // Form composite particle candidate
                             TLorentzVector comp_p = p1 + p2;
-                            
+
+                            // Calculate helicity angle
+                            TVector3 comp_dir = comp_p.Vect().Unit();
+                            TVector3 boost_vec = comp_p.BoostVector();
+                            TLorentzVector p1_rest = p1;
+                            p1_rest.Boost(-boost_vec);
+                            TVector3 p1_dir = p1_rest.Vect().Unit();
+                            double cos_helicity = comp_dir.Dot(p1_dir);
+                            helicity_angles.push_back(cos_helicity);
+
                             // Store all information
                             E.push_back(comp_p.E());
                             px.push_back(comp_p.Px());
                             py.push_back(comp_p.Py());
                             pz.push_back(comp_p.Pz());
                             p1_index.push_back(i);
-                            p2_index.push_back(j);
+                            p2_index.push_back(i);
                         }}
-                    }}
                     
-                    return std::make_tuple(E, px, py, pz, p1_index, p2_index);
-                }}
-            """)
-            self._defined_functions.add(func_name)
+                        return std::make_tuple(E, px, py, pz, helicity_angles, p1_index, p2_index);
+                    }}
+                """)
+                self._defined_functions.add(func_name)
         
-        # Define all phi combination variables
-        new_df = new_df.Define(
-            "Pairs",
-            f"calculate_all_pairs({p1_branches[0]}, {p1_branches[1]}, {p1_branches[2]}, "
-            f"{p2_branches[0]}, {p2_branches[1]}, {p2_branches[2]}, {mass[0]}, {mass[1]})"
-        )
+            call_func = func_name
+    
+        # Define combination variables using the appropriate function
+        if "Pairs" not in new_df.GetColumnNames():
+            new_df = new_df.Define(
+                "Pairs",
+                f"{call_func}({p1_branches[0]}, {p1_branches[1]}, {p1_branches[2]}, "
+                f"{p2_branches[0]}, {p2_branches[1]}, {p2_branches[2]}, {mass[0]}, {mass[1]})"
+            )
+        else:
+            new_df = new_df.Redefine(
+                "Pairs",
+                f"{call_func}({p1_branches[0]}, {p1_branches[1]}, {p1_branches[2]}, "
+                f"{p2_branches[0]}, {p2_branches[1]}, {p2_branches[2]}, {mass[0]}, {mass[1]})"
+            )
         
         # Extract individual components as separate columns
         names = particle_name if particle_name else ("comp_p","p1","p2")
@@ -1188,16 +1280,19 @@ class RDF_process:
                      "px": f"{names[0]}_px", 
                      "py": f"{names[0]}_py", 
                      "pz": f"{names[0]}_pz", 
+                     "helicity_angle": f"{names[0]}_helicity_angle",
                      "p1_index": f"{names[1]}_index", 
                      "p2_index": f"{names[2]}_index"}
                     
-        key_to_idx = {"E":0, "px":1, "py":2, "pz":3, "p1_index":4, "p2_index":5}
+        key_to_idx = {"E":0, "px":1, "py":2, "pz":3, "helicity_angle":4,"p1_index":5, "p2_index":6}
                     
         for key, branch in variables.items():
             idx = key_to_idx[key]
             new_df = new_df.Define(branch, f"std::get<{idx}>(Pairs)")
 
         return new_df
+
+
 
 
 

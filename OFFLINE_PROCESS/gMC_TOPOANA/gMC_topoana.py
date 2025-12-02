@@ -69,6 +69,12 @@ def gMC_topoana(input_rootFile:str, tree_name:str, channel_to_filter:Optional[Li
         for mediate_state, final_state in channel_to_filter:
             decay_indexes += find_decay_indices(f"{output_prefix}.txt", final_state,  mediate_state)
             print(decay_indexes)
+        
+        # Handle case when no matching decays are found
+        if not decay_indexes:
+            print("Warning: No matching decay channels found to filter. Returning original topoana output.")
+            return f"{output_prefix}.root"
+        
         cut_string = " "
         for index in decay_indexes:
             cut_string += f'&& (iDcyTr != {index}) '
@@ -91,6 +97,5 @@ def gMC_topoana(input_rootFile:str, tree_name:str, channel_to_filter:Optional[Li
 #gMC_topoana("/gpfs/group/belle2/users2022/wangz/data_gMC/tagged_ISRphiKK_MC/gMC_3Cfit_4S_hadron/only_4S/processed.root","event")
 
 
-    
-    
-     
+
+
