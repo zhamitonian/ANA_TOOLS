@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+
+from OFFLINE_PROCESS import gMC_topoana
+import argparse
+
+def topo():
+    parser = argparse.ArgumentParser(description="gMC topo analysis")
+    parser.add_argument("input", help="Input file path")
+    parser.add_argument("--tree", "-t", default="event", help="Name of the TTree to process (default: event)")
+    parser.add_argument("--exclude_final", "-ef", nargs='+', 
+                        help="final states to filter, e.g. 'e+ e- ---> K+ K+ K- K-' 'e+ e- ---> pi+ pi- K+ K-'")
+    parser.add_argument("--exclude_mediate", "-em", nargs='*', default=[], 
+                        help="mediate states to exclude (same order as final states), use 'None' for no mediate state, e.g. 'phi --> K+ K-' 'None'")
+
+    args = parser.parse_args()
+    
+    # Check if exclude_final is provided and validate lengths
+    if args.exclude_final:
+        if len(args.exclude_final) != len(args.exclude_mediate):
+            parser.error(f"Number of final states ({len(args.exclude_final)}) must match number of mediate states ({len(args.exclude_mediate)})")
+    
+    input_path = args.input
+    tree_name = args.tree
+    
+    # Create (final_state, mediate_state) pair list if filtering is specified
+    if args.exclude_final:
+        exclude_modes = []
+        for final, mediate in zip(args.exclude_final, args.exclude_mediate):
+            # Convert 'None' string to actual None
+            mediate_state = None if mediate.lower() == 'none' else mediate
+            # Note: gMC_topoana expects (mediate_state, final_state) order based on find_decay_indices call
+            exclude_modes.append((mediate_state, final))
+        
+        output_path = gMC_topoana(input_path, tree_name, exclude_modes)
+        print(f"Topo analysis done with filtering, output path: {output_path}")
+        print(f"Filtered {len(exclude_modes)} channel(s)")
+    else:
+        # No filtering, just run topology analysis
+        output_path = gMC_topoana(input_path, tree_name)
+        print(f"Topo analysis done without filtering, output path: {output_path}")
+
+if __name__ == "__main__":
+    topo()

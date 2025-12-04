@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os
+import subprocess
+import argparse
+import shutil
+
+def check_hadd_available():
+    """Check if hadd command is available in PATH"""
+    if shutil.which("hadd") is None:
+        print("Error: 'hadd' command not found.")
+        print("Please source your Belle II or ROOT environment first:")
+        print("  source /path/to/belle2/setup.sh")
+        return False
+    return True
+
+def hadd_b1(directory = "./"):
+    types = ['evtgen-charged', 'evtgen-mixed', 'evtgen-charm', 'evtgen-uds']
+    
+    for type in types:
+        output_dir = os.path.join(directory, "by_types", f"{type}")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Create command as a single string with wildcards
+        output_file = os.path.join(output_dir, f"{type}.root")
+        cmd = f"hadd -k {output_file} {directory}/*/{type}_*.root"
+        
+        print(f"Running: {cmd}")
+        # Use shell=True to let the shell handle wildcard expansion
+        subprocess.run(cmd, check=True, shell=True)
+
+def hadd_b2(directory = "./"):
+    types_b2 = ['charged', 'mixed', 'ccbar', 'ssbar', 'uubar', 'ddbar']
+
+    if directory.endswith("/"):
+        directory = directory[:-1]
+
+    for type in types_b2:
+        output_dir = os.path.join(directory, "by_types", f"{type}")
+        os.makedirs(output_dir, exist_ok=True)
+
+        output_file = os.path.join(output_dir, f"{type}.root")
+
+        cmd = f"hadd -k {output_file} {directory}/*{type}/*/*.root"
+        print(" ".join(cmd))
+        subprocess.run(cmd, check=True, shell=True)
+
+
+def main():
+    paser = argparse.ArgumentParser(description="Hadd generic MC root files by event types")
+    paser.add_argument("--dir", "-d", type=str, default="./", help="directory containing root files")
+    paser.add_argument("--version", "-v", type=str, default="b1", help="belle2 b1 or b2")
+    args = paser.parse_args()
+
+    if not check_hadd_available():
+        return 1
+
+    if args.version == "b1":
+        hadd_b1(args.dir)
+    else:
+        hadd_b2(args.dir)
+
+if __name__ == "__main__":
+    main()

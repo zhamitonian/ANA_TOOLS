@@ -1,0 +1,354 @@
+#!/usr/bin/env python3
+
+import argparse
+import subprocess
+import sys
+import os
+
+# Data configurations organized by data_type (same as process_belle_data.py)
+DATA_CONFIGS = {
+    "1S_scan": [
+        {"exp": 65, "run_start": 1008, "run_end": 1232, "runs_per_job": 50}
+    ],
+    
+    "2S_scan": [
+        {"exp": 67, "run_start": 1002, "run_end": 1123, "runs_per_job": 50},
+        {"exp": 71, "run_start": 303, "run_end": 696, "runs_per_job": 50}
+    ],
+    
+    "3S_scan": [
+        {"exp": 49, "run_start": 1001, "run_end": 1227, "runs_per_job": 50}
+    ],
+    
+    "on_resonance": [
+        {"exp": 7, "run_start": 1, "run_end": 2865, "runs_per_job": 150},
+        {"exp": 9, "run_start": 1, "run_end": 1220, "runs_per_job": 65},
+        {"exp": 11, "run_start": 1, "run_end": 1287, "runs_per_job": 70},
+        {"exp": 13, "run_start": 1, "run_end": 1627, "runs_per_job": 82},
+        {"exp": 15, "run_start": 1, "run_end": 1437, "runs_per_job": 72},
+        {"exp": 17, "run_start": 1, "run_end": 937, "runs_per_job": 47},
+        {"exp": 19, "run_start": 1, "run_end": 1643, "runs_per_job": 55},
+        {"exp": 21, "run_start": 1, "run_end": 324, "runs_per_job": 33},
+        {"exp": 23, "run_start": 1, "run_end": 607, "runs_per_job": 61},
+        {"exp": 25, "run_start": 1, "run_end": 2122, "runs_per_job": 71},
+        {"exp": 27, "run_start": 1, "run_end": 1632, "runs_per_job": 55},
+        {"exp": 31, "run_start": 1, "run_end": 1715, "runs_per_job": 60},
+        {"exp": 33, "run_start": 1, "run_end": 870, "runs_per_job": 22},
+        {"exp": 35, "run_start": 1, "run_end": 687, "runs_per_job": 35},
+        {"exp": 37, "run_start": 1, "run_end": 1913, "runs_per_job": 30},
+        {"exp": 39, "run_start": 1, "run_end": 1357, "runs_per_job": 18},
+        {"exp": 41, "run_start": 1, "run_end": 1261, "runs_per_job": 22},
+        {"exp": 43, "run_start": 1, "run_end": 1149, "runs_per_job": 20},
+        {"exp": 45, "run_start": 1, "run_end": 450, "runs_per_job": 23},
+        {"exp": 47, "run_start": 1, "run_end": 881, "runs_per_job": 20},
+        {"exp": 49, "run_start": 1, "run_end": 922, "runs_per_job": 31},
+        {"exp": 51, "run_start": 1, "run_end": 1777, "runs_per_job": 30},
+        {"exp": 55, "run_start": 1, "run_end": 1749, "runs_per_job": 20},
+        {"exp": 61, "run_start": 1, "run_end": 1207, "runs_per_job": 21},
+        {"exp": 63, "run_start": 1, "run_end": 783, "runs_per_job": 50},
+        {"exp": 65, "run_start": 1, "run_end": 801, "runs_per_job": 101}
+    ],
+    
+    "5S_onresonance": [
+        {"exp": 43, "run_start": 1013, "run_end": 1034, "runs_per_job": 100},
+        {"exp": 53, "run_start": 1, "run_end": 272, "runs_per_job": 100},
+        {"exp": 67, "run_start": 98, "run_end": 696, "runs_per_job": 200},
+        {"exp": 69, "run_start": 1, "run_end": 1309, "runs_per_job": 220},
+        {"exp": 71, "run_start": 27, "run_end": 221, "runs_per_job": 300},
+        {"exp": 71, "run_start": 2001, "run_end": 2244, "runs_per_job": 300}
+    ],
+    
+    "5S_scan": [
+        {"exp": 43, "run_start": 1002, "run_end": 1012, "runs_per_job": 20},
+        {"exp": 61, "run_start": 1210, "run_end": 1373, "runs_per_job": 50},
+        {"exp": 73, "run_start": 22, "run_end": 916, "runs_per_job": 100}
+    ],
+    
+    "continuum": [
+        {"exp": 7, "run_start": 1490, "run_end": 2293, "runs_per_job": 100},
+        {"exp": 11, "run_start": 165, "run_end": 1367, "runs_per_job": 100},
+        {"exp": 13, "run_start": 454, "run_end": 1587, "runs_per_job": 100},
+        {"exp": 15, "run_start": 714, "run_end": 1314, "runs_per_job": 100},
+        {"exp": 17, "run_start": 486, "run_end": 544, "runs_per_job": 100},
+        {"exp": 19, "run_start": 1, "run_end": 1709, "runs_per_job": 100},
+        {"exp": 23, "run_start": 244, "run_end": 356, "runs_per_job": 100},
+        {"exp": 25, "run_start": 1468, "run_end": 1599, "runs_per_job": 100},
+        {"exp": 27, "run_start": 290, "run_end": 1251, "runs_per_job": 100},
+        {"exp": 31, "run_start": 937, "run_end": 1064, "runs_per_job": 100},
+        {"exp": 33, "run_start": 505, "run_end": 624, "runs_per_job": 100},
+        {"exp": 35, "run_start": 588, "run_end": 641, "runs_per_job": 100},
+        {"exp": 37, "run_start": 659, "run_end": 1664, "runs_per_job": 100},
+        {"exp": 39, "run_start": 636, "run_end": 1203, "runs_per_job": 100},
+        {"exp": 41, "run_start": 703, "run_end": 1157, "runs_per_job": 100},
+        {"exp": 43, "run_start": 559, "run_end": 972, "runs_per_job": 100},
+        {"exp": 45, "run_start": 383, "run_end": 421, "runs_per_job": 100},
+        {"exp": 47, "run_start": 550, "run_end": 622, "runs_per_job": 100},
+        {"exp": 49, "run_start": 553, "run_end": 706, "runs_per_job": 100},
+        {"exp": 51, "run_start": 1312, "run_end": 1805, "runs_per_job": 100},
+        {"exp": 55, "run_start": 793, "run_end": 1677, "runs_per_job": 100},
+        {"exp": 61, "run_start": 668, "run_end": 739, "runs_per_job": 100},
+        {"exp": 63, "run_start": 618, "run_end": 679, "runs_per_job": 100},
+        {"exp": 65, "run_start": 626, "run_end": 687, "runs_per_job": 100},
+        {"exp": 67, "run_start": 698, "run_end": 742, "runs_per_job": 100},
+        {"exp": 69, "run_start": 823, "run_end": 1397, "runs_per_job": 100},
+        {"exp": 71, "run_start": 2249, "run_end": 2292, "runs_per_job": 100},
+        {"exp": 73, "run_start": 286, "run_end": 449, "runs_per_job": 100}
+    ]
+}
+
+# Map data types to more user-friendly names
+DATA_TYPE_ALIASES = {
+    "1S_scan": "y1s",
+    "2S_scan": "y2s",
+    "3S_scan": "y3s",
+    "on_resonance": "y4s",
+    "5S_onresonance": "y5s_on",
+    "5S_scan": "y5s_scan",
+    "continuum": "continuum"
+}
+
+ALIAS_TO_DATA_TYPE = {v: k for k, v in DATA_TYPE_ALIASES.items()}
+
+# Event types available for generic MC
+EVENT_TYPES = {
+    "y4s": ["evtgen-charged", "evtgen-mixed", "evtgen-charm", "evtgen-uds"],
+    "y1s": ["evtgen-charm", "evtgen-uds"],
+    "y2s": ["evtgen-charm", "evtgen-uds"],
+    "y3s": ["evtgen-charm", "evtgen-uds"],
+    "y5s_on": ["evtgen-charm", "evtgen-uds", "evtgen-bsbs", "evtgen-nonbsbs"],
+    "continuum": ["evtgen-charm", "evtgen-uds"]
+}
+
+# b2bii
+def submit_job(ex, rs, re, ty, dt, rPJ, stream_no, output_dir, script_path):
+    """Submit generic MC jobs for a given configuration."""
+    log_path = os.path.join(output_dir, "log", dt)
+    root_path = os.path.join(output_dir, dt)
+    os.makedirs(log_path, exist_ok=True)
+    os.makedirs(root_path, exist_ok=True)
+
+    job_count = 0
+    for rs_job in range(rs, re + 1, rPJ):
+        re_job = min(rs_job + rPJ - 1, re)
+        url = f"http://bweb3/montecarlo.php?ex={ex}&rs={rs_job}&re={re_job}&ty={ty}&dt={dt}&bl=caseB&st={stream_no}"
+        root_file = os.path.join(root_path, f"{ty}_e{ex}_r{rs_job}_{re_job}_st{stream_no}.root")
+        log_file = os.path.join(log_path, f"{ty}_e{ex}_r{rs_job}_{re_job}_st{stream_no}.log")
+        cmd = f"bsub -q s -oo {log_file} basf2 {script_path} belle1 gMC \"{url}\" {root_file}"
+        subprocess.run(cmd, shell=True, check=True)
+        job_count += 1
+        #print(cmd)
+    return job_count
+
+# basf 
+def submit_job_basf(ex, rs, re, ty, dt, rPJ, stream_no, output_dir, so_file):
+    """Submit jobs for a given configuration."""
+    log_path = os.path.join(output_dir, "log", dt)
+    root_path = os.path.join(output_dir, dt)
+    script_path = os.path.join(output_dir, "scripts")
+    os.makedirs(log_path, exist_ok=True)
+    os.makedirs(root_path, exist_ok=True)
+    os.makedirs(script_path, exist_ok=True)
+
+    job_count = 0
+    for rs_job in range(rs, re + 1, rPJ):
+        re_job = min(rs_job + rPJ - 1, re)
+        url = f"http://bweb3/montecarlo.php?ex={ex}&rs={rs_job}&re={re_job}&ty={ty}&dt={dt}&bl=caseB&st={stream_no}"
+        root_file = os.path.join(root_path, f"{ty}_e{ex}_r{rs_job}_{re_job}_st{stream_no}.root")
+        log_file = os.path.join(log_path, f"{ty}_e{ex}_r{rs_job}_{re_job}_st{stream_no}.log")
+        
+        # Create temporary shell script
+        shell_script = os.path.join(script_path, f"{dt}_{ty}_e{ex}_r{rs_job}_{re_job}_st{stream_no}.sh")
+        _create_basf_script(shell_script, url, root_file, so_file)
+        
+        # Submit job
+        cmd = f"bsub -q s -cwd {output_dir} -oo {log_file}  /sw/belle/local/bin/centos7-exec bash {shell_script}"
+        subprocess.run(cmd, shell=True, check=True)
+        #print(f"Submitting job: {cmd}")
+        job_count += 1
+    return job_count
+
+def _create_basf_script(filename, url, output_root, so_file):
+    """
+    Create BASF shell script for job submission
+    Args:
+        filename: str, path to output shell script
+        url: str, mdst data url 
+        output_root: str, path to output ROOT file
+    """
+    module_filename = os.path.basename(so_file)
+    module, _ = os.path.splitext(module_filename)
+
+    with open(filename, 'w') as f:
+        # Write header
+        f.write("#!/bin/bash\n")
+        f.write('source /sw/belle/local/etc/bashrc_general\n')
+        f.write('export BASF_USER_IF=basfsh.so\n')
+        f.write('export BASF_USER_INIT=user_init.so\n\n')
+
+        # Write BASF configuration
+        f.write('basf << EOF\n\n')
+        f.write(f'module register fix_mdst {module}\n')
+        f.write('path create main\n')
+        f.write('path create Analysis\n\n')
+        
+        f.write(f'path add_module main fix_mdst {module}\n\n')
+        
+        f.write('path add_condition main >:0:Analysis\n')
+        f.write('path add_condition main =<:0:KILL\n')
+        f.write(f'path add_module Analysis {module}\n\n')
+        
+        # Set parameters
+        f.write(f'module put_parameter {module} output_filename\{output_root}\n' )
+        f.write(f'module put_parameter {module} isMCSample\\1\n\n')
+        f.write(f'module put_parameter {module} rmMCTree\\1\n')
+        f.write(f'module put_parameter {module} rmTree\\0\n')
+        f.write(f'module put_parameter {module} rmMixTree\\1\n\n')
+        
+        # Initialize
+        f.write('initialize\n')
+        
+        # Process URL
+        f.write(f'process_url {url}\n\n')
+        
+        # Terminate
+        f.write('terminate\n')
+        f.write('EOF\n')
+        f.write('exit\n')
+        
+        # Make script executable
+        os.chmod(filename, 0o755)
+
+def main():
+    parser = argparse.ArgumentParser(description="Process Belle generic MC data")
+    parser.add_argument("script_path", help="Path to the analysis Python script or BASF .so file")
+    parser.add_argument("--all", action="store_true", help="Process all data types")
+    
+    parser.add_argument("--framework", "-fw", type=str, choices=['basf', 'b2bii'], default='b2bii',
+                    help="Choose analysis framework (default: b2bii)")
+
+    # Add options for each data type
+    data_group = parser.add_argument_group('Data Types')
+    for alias in sorted(ALIAS_TO_DATA_TYPE.keys()):
+        data_type = ALIAS_TO_DATA_TYPE[alias]
+        data_group.add_argument(f"--{alias}", action="store_true",
+                            help=f"Process {data_type} ({len(DATA_CONFIGS[data_type])} configs)")
+    
+    # Add experiment and stream filters
+    filter_group = parser.add_argument_group('Filters')
+    filter_group.add_argument("--exp", type=int, nargs='+',
+                              choices=sorted({config['exp'] for configs in DATA_CONFIGS.values() for config in configs}),
+                              help="Filter by experiment number")
+    filter_group.add_argument("--stream", type=int, choices=list(range(10))[1:], 
+                           help="number of streams (default: n = 1, range(n) = [0])")
+    filter_group.add_argument("--list", action="store_true", 
+                           help="List available data types, experiments and event types")
+    
+    # Add event type options
+    config_group = parser.add_argument_group('Configuration')
+    config_group.add_argument("--event-types", nargs='+', 
+                          choices=["evtgen-charged", "evtgen-mixed", "evtgen-charm", 
+                                  "evtgen-uds", "evtgen-bsbs", "evtgen-nonbsbs"],
+                          help="Event types to process (default: all available for data type)")
+    
+    args = parser.parse_args()
+    
+    # List data types if requested
+    if args.list:
+        print("Available data types:")
+        for data_type, alias in DATA_TYPE_ALIASES.items():
+            print(f"  --{alias.ljust(10)} : {data_type.ljust(18)} ({len(DATA_CONFIGS[data_type])} configs)")
+            if alias in EVENT_TYPES:
+                print(f"                Event types: {', '.join(EVENT_TYPES[alias])}")
+        
+        all_exps = set()
+        for configs in DATA_CONFIGS.values():
+            for config in configs:
+                all_exps.add(config['exp'])
+        print("\nAvailable experiments:")
+        print(f"  {', '.join(str(exp) for exp in sorted(all_exps))}")
+        return
+    
+    # Verify the script path exists
+    script_path = os.path.abspath(args.script_path)
+    if not os.path.exists(script_path):
+        print(f"Error: Script '{script_path}' does not exist.")
+        return
+    
+    output_dir = os.path.dirname(script_path)
+    
+    # Determine which data types to process
+    types_to_process = []
+    if args.all:
+        types_to_process = list(DATA_CONFIGS.keys())
+    else:
+        types_to_process = [ALIAS_TO_DATA_TYPE[alias] for alias, enabled in 
+                           vars(args).items() if enabled and alias in ALIAS_TO_DATA_TYPE]
+    
+    if not types_to_process:
+        parser.print_help()
+        print("\nNo data types selected. Please specify at least one data type or use --all.")
+        return
+    
+    # Determine stream numbers to process
+    streams = range(args.stream) if args.stream is not None else range(4)
+    print(streams)
+    
+    # Process selected data types
+    total_jobs = 0
+    for data_type in types_to_process:
+        configs = DATA_CONFIGS[data_type]
+        alias = DATA_TYPE_ALIASES[data_type]
+        
+        # Apply exp filter if provided
+        if args.exp:
+            configs = [c for c in configs if c["exp"] in args.exp]
+            if not configs:
+                print(f"No configurations for experiments {args.exp} in {data_type}")
+                continue
+        
+        # Determine event types for this data type
+        if args.event_types:
+            event_types = [et for et in args.event_types if et in EVENT_TYPES.get(alias, [])]
+            if not event_types:
+                print(f"Warning: None of the specified event types are valid for {data_type}")
+                continue
+        else:
+            event_types = EVENT_TYPES.get(alias, [])
+        
+        print(f"\nProcessing {data_type}:")
+        print(f"  Configurations: {len(configs)}")
+        print(f"  Event types: {', '.join(event_types)}")
+        print(f"  Streams: {', '.join(str(s) for s in streams)}")
+
+        if args.framework == 'basf':
+            submit_job_func = submit_job_basf
+
+        for config in configs:
+            for event_type in event_types:
+                for stream_no in streams:
+                    extra_stream = 10 if config['exp'] < 30 else 0
+                    if config['exp'] < 30 and data_type == "continuum":
+                        extra_stream += 10
+                    stream_no += extra_stream
+
+                    total_jobs += submit_job_func(
+                        config['exp'],
+                        config['run_start'],
+                        config['run_end'],
+                        event_type,
+                        data_type,
+                        #config['runs_per_job'],
+                        10,
+                        stream_no,
+                        output_dir,
+                        script_path
+                    )
+    
+    print(f"\n{'='*60}")
+    print(f"Total jobs submitted: {total_jobs}")
+    print(f"Output directory: {output_dir}")
+    print(f"Log files: {output_dir}/log/<data_type>/")
+    print(f"Root files: {output_dir}/<data_type>/")
+
+if __name__ == "__main__":
+    main()

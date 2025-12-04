@@ -1,0 +1,342 @@
+#!/usr/bin/env python3
+
+import argparse
+import subprocess
+import sys
+import os
+import shutil
+
+# Data configurations organized by data_type
+DATA_CONFIGS = {
+    "1S_scan": [
+        {"exp": 65, "run_start": 1008, "run_end": 1232, "runs_per_job": 15}
+    ],
+    
+    "2S_scan": [
+        {"exp": 67, "run_start": 1002, "run_end": 1123, "runs_per_job": 15},
+        {"exp": 71, "run_start": 303, "run_end": 512, "runs_per_job": 15},
+        {"exp": 71, "run_start": 528, "run_end": 696, "runs_per_job": 15},
+        {"exp": 71, "run_start": 1006, "run_end": 1007, "runs_per_job": 15}
+    ],
+    
+    "3S_scan": [
+        {"exp": 49, "run_start": 1001, "run_end": 1227, "runs_per_job": 15}
+    ],
+    
+    "on_resonance": [
+        {"exp": 7, "run_start": 1, "run_end": 2865, "runs_per_job": 500},
+        {"exp": 9, "run_start": 1, "run_end": 1220, "runs_per_job": 310},
+        {"exp": 11, "run_start": 1, "run_end": 1287,"runs_per_job": 330},
+        {"exp": 13, "run_start": 1, "run_end": 1627,"runs_per_job": 300},
+        {"exp": 15, "run_start": 1, "run_end": 1437,"runs_per_job": 250},
+        {"exp": 17, "run_start": 1, "run_end": 937, "runs_per_job": 200},
+        {"exp": 19, "run_start": 1, "run_end": 1643,"runs_per_job": 170},
+        {"exp": 21, "run_start": 1, "run_end": 324, "runs_per_job": 110},
+        {"exp": 23, "run_start": 1, "run_end": 607, "runs_per_job": 155},
+        {"exp": 25, "run_start": 1, "run_end": 2122, "runs_per_job": 200},
+        {"exp": 27, "run_start": 1, "run_end": 1632, "runs_per_job": 150},
+        {"exp": 31, "run_start": 1, "run_end": 1715, "runs_per_job": 150},
+        {"exp": 33, "run_start": 1, "run_end": 500, "runs_per_job": 100},
+        {"exp": 33, "run_start": 601, "run_end": 870, "runs_per_job": 50},
+        {"exp": 35, "run_start": 1, "run_end": 687, "runs_per_job": 70},
+        {"exp": 37, "run_start": 1, "run_end": 1600, "runs_per_job": 50},
+        {"exp": 37, "run_start": 1651, "run_end": 1913, "runs_per_job": 50},
+        {"exp": 39, "run_start": 7, "run_end": 656, "runs_per_job": 50},
+        {"exp": 39, "run_start": 707, "run_end": 1357, "runs_per_job": 50},
+        {"exp": 41, "run_start": 4, "run_end": 1261, "runs_per_job": 30},
+        {"exp": 43, "run_start": 1, "run_end": 480, "runs_per_job": 40},
+        {"exp": 43, "run_start": 481, "run_end": 520, "runs_per_job": 20},
+        {"exp": 43, "run_start": 521, "run_end": 560, "runs_per_job": 40},
+        {"exp": 43, "run_start": 601, "run_end": 914, "runs_per_job": 40},
+        {"exp": 43, "run_start": 1102, "run_end": 1149, "runs_per_job": 40},
+        {"exp": 45, "run_start": 1, "run_end": 450, "runs_per_job": 50},
+        {"exp": 47, "run_start": 1, "run_end": 536, "runs_per_job": 40},
+        {"exp": 47, "run_start": 623, "run_end": 881, "runs_per_job": 40},
+        {"exp": 49, "run_start": 13, "run_end": 243, "runs_per_job": 50},
+        {"exp": 49, "run_start": 304, "run_end": 541, "runs_per_job": 50},
+        {"exp": 49, "run_start": 707, "run_end": 922, "runs_per_job": 50},
+        {"exp": 51, "run_start": 5, "run_end": 1581, "runs_per_job": 50},
+        {"exp": 51, "run_start": 1692, "run_end": 1777, "runs_per_job": 50},
+        {"exp": 55, "run_start": 1, "run_end": 784, "runs_per_job": 50},
+        {"exp": 55, "run_start": 855, "run_end": 1578, "runs_per_job": 40},
+        {"exp": 55, "run_start": 1679, "run_end": 1749, "runs_per_job": 50},
+        {"exp": 61, "run_start": 24, "run_end": 673, "runs_per_job": 50},
+        {"exp": 61, "run_start": 724, "run_end": 1207, "runs_per_job": 50},
+        {"exp": 63, "run_start": 55, "run_end": 783, "runs_per_job": 50},
+        {"exp": 65, "run_start": 20, "run_end": 619, "runs_per_job": 40},
+        {"exp": 65, "run_start": 670, "run_end": 801, "runs_per_job": 40}
+    ],
+    
+    "5S_onresonance": [
+        {"exp": 43, "run_start": 1013, "run_end": 1034, "runs_per_job": 50},
+        {"exp": 53, "run_start": 1, "run_end": 272, "runs_per_job": 50},
+        {"exp": 67, "run_start": 98, "run_end": 696, "runs_per_job": 50},
+        {"exp": 69, "run_start": 1, "run_end": 1309, "runs_per_job": 50},
+        {"exp": 71, "run_start": 27, "run_end": 221, "runs_per_job": 80},
+        {"exp": 71, "run_start": 2001, "run_end": 2244, "runs_per_job": 50}
+    ],
+    
+    "5S_scan": [
+        {"exp": 43, "run_start": 1002, "run_end": 1012, "runs_per_job": 20},
+        {"exp": 61, "run_start": 1210, "run_end": 1373, "runs_per_job": 50},
+        {"exp": 73, "run_start": 22, "run_end": 471, "runs_per_job": 230},
+        {"exp": 73, "run_start": 471, "run_end": 916, "runs_per_job": 100}
+    ],
+    
+    "continuum": [
+        {"exp": 7, "run_start": 1490, "run_end": 2293, "runs_per_job": 500},
+        {"exp": 11, "run_start": 165, "run_end": 1367, "runs_per_job": 610},
+        {"exp": 13, "run_start": 454, "run_end": 1587, "runs_per_job": 750},
+        {"exp": 15, "run_start": 714, "run_end": 1314, "runs_per_job": 350},
+        {"exp": 17, "run_start": 486, "run_end": 544, "runs_per_job": 50},
+        {"exp": 19, "run_start": 1,   "run_end": 900, "runs_per_job": 450},
+        {"exp": 19, "run_start": 1351, "run_end": 1709, "runs_per_job": 450},
+        {"exp": 23, "run_start": 244, "run_end": 356, "runs_per_job": 75},
+        {"exp": 25, "run_start": 1468, "run_end": 1599, "runs_per_job": 75},
+        {"exp": 27, "run_start": 290, "run_end": 589, "runs_per_job": 300},
+        {"exp": 27, "run_start": 890, "run_end": 1251, "runs_per_job": 300},
+        {"exp": 31, "run_start": 937, "run_end": 1064, "runs_per_job": 75},
+        {"exp": 33, "run_start": 505, "run_end": 624, "runs_per_job": 75},
+        {"exp": 35, "run_start": 588, "run_end": 641, "runs_per_job": 50},
+        {"exp": 37, "run_start": 659, "run_end": 908, "runs_per_job": 250},
+        {"exp": 37, "run_start": 1409, "run_end": 1664, "runs_per_job": 250},
+        {"exp": 39, "run_start": 636, "run_end": 785, "runs_per_job": 150},
+        {"exp": 39, "run_start": 1086, "run_end": 1203, "runs_per_job": 150},
+        {"exp": 41, "run_start": 703, "run_end": 832, "runs_per_job": 130},
+        {"exp": 41, "run_start": 1093, "run_end": 1157, "runs_per_job": 130},
+        {"exp": 43, "run_start": 559, "run_end": 688, "runs_per_job": 130},
+        {"exp": 43, "run_start": 819, "run_end": 972, "runs_per_job": 130},
+        {"exp": 45, "run_start": 383, "run_end": 421, "runs_per_job": 50},
+        {"exp": 47, "run_start": 550, "run_end": 622, "runs_per_job": 50},
+        {"exp": 49, "run_start": 553, "run_end": 706, "runs_per_job": 100},
+        {"exp": 51, "run_start": 1312, "run_end": 1441, "runs_per_job": 130},
+        {"exp": 51, "run_start": 1702, "run_end": 1805, "runs_per_job": 130},
+        {"exp": 55, "run_start": 793, "run_end": 853, "runs_per_job": 50},
+        {"exp": 55, "run_start": 1579, "run_end": 1677, "runs_per_job": 50},
+        {"exp": 61, "run_start": 668, "run_end": 739, "runs_per_job": 50},
+        {"exp": 63, "run_start": 618, "run_end": 679, "runs_per_job": 50},
+        {"exp": 65, "run_start": 626, "run_end": 687, "runs_per_job": 50},
+        {"exp": 67, "run_start": 698, "run_end": 742, "runs_per_job": 50},
+        {"exp": 69, "run_start": 823, "run_end": 972, "runs_per_job": 150},
+        {"exp": 69, "run_start": 1273, "run_end": 1397, "runs_per_job": 150},
+        {"exp": 71, "run_start": 2249, "run_end": 2292, "runs_per_job": 50},
+        {"exp": 73, "run_start": 286, "run_end": 449, "runs_per_job": 100}
+    ]
+}
+
+# Map data types to more user-friendly names for command line arguments
+DATA_TYPE_ALIASES = {
+    "1S_scan": "y1s",
+    "2S_scan": "y2s", 
+    "3S_scan": "y3s",
+    "on_resonance": "y4s",
+    "5S_onresonance": "y5s_on",
+    "5S_scan": "y5s_scan",
+    "continuum": "continuum"
+}
+
+# Create reverse mapping for looking up data_type from alias
+ALIAS_TO_DATA_TYPE = {v: k for k, v in DATA_TYPE_ALIASES.items()}
+# b2bii
+def submit_job(ex, rs, re, skm, dt, rPJ, output_dir, script_path):
+    """Submit jobs for a given configuration."""
+    log_path = os.path.join(output_dir, "log", dt)
+    root_path = os.path.join(output_dir, dt)
+    os.makedirs(log_path, exist_ok=True)
+    os.makedirs(root_path, exist_ok=True)
+
+    job_count = 0
+    for rs_job in range(rs, re + 1, rPJ):
+        re_job = min(rs_job + rPJ - 1, re)
+        url = f"http://bweb3/mdst.php?ex={ex}&rs={rs_job}&re={re_job}&skm={skm}&dt={dt}&bl=caseB"
+        root_file = os.path.join(root_path, f"{skm}_e{ex}_r{rs_job}_{re_job}.root")
+        log_file = os.path.join(log_path, f"{skm}_e{ex}_r{rs_job}_{re_job}.log")
+        cmd = f"bsub -q h -oo {log_file} basf2 {script_path} belle1 data \"{url}\" {root_file}"
+        subprocess.run(cmd, shell=True, check=True)
+        job_count += 1
+    return job_count
+
+# basf
+def submit_job_basf(ex, rs, re, skm, dt, rPJ, output_dir, so_file):
+    """Submit jobs for a given configuration."""
+    log_path = os.path.join(output_dir, "log", dt)
+    root_path = os.path.join(output_dir, dt)
+    script_path = os.path.join(output_dir, "scripts")
+    os.makedirs(log_path, exist_ok=True)
+    os.makedirs(root_path, exist_ok=True)
+    os.makedirs(script_path, exist_ok=True)
+
+    job_count = 0
+    for rs_job in range(rs, re + 1, rPJ):
+        re_job = min(rs_job + rPJ - 1, re)
+        url = f"http://bweb3/mdst.php?ex={ex}&rs={rs_job}&re={re_job}&skm={skm}&dt={dt}&bl=caseB"
+        root_file = os.path.join(root_path, f"{skm}_e{ex}_r{rs_job}_{re_job}.root")
+        log_file = os.path.join(log_path, f"{skm}_e{ex}_r{rs_job}_{re_job}.log")
+        
+        # Create temporary shell script
+        shell_script = os.path.join(script_path, f"job_{skm}_{ex}_{rs_job}_{re_job}.sh")
+        _create_basf_script(shell_script, url, root_file, so_file)
+        
+        # Submit job
+        cmd = f"bsub -q s -cwd {output_dir} -oo {log_file} /sw/belle/local/bin/centos7-exec bash {shell_script}"
+        subprocess.run(cmd, shell=True, check=True)
+        #print(f"Submitting job: {cmd}")
+        job_count += 1
+    return job_count
+
+def _create_basf_script(filename, url, output_root, so_file):
+    """
+    Create BASF shell script for job submission
+    Args:
+        filename: str, path to output shell script
+        url: str, mdst data url 
+        output_root: str, path to output ROOT file
+    """
+    module_filename = os.path.basename(so_file)
+    module, _ = os.path.splitext(module_filename)
+
+    with open(filename, 'w') as f:
+        # Write header
+        f.write("#!/bin/bash\n")
+        f.write('source /sw/belle/local/etc/bashrc_general\n')
+        f.write('export BASF_USER_IF=basfsh.so\n')
+        f.write('export BASF_USER_INIT=user_init.so\n\n')
+
+        # Write BASF configuration
+        f.write('basf << EOF\n\n')
+        f.write(f'module register fix_mdst {module}\n')
+        f.write('path create main\n')
+        f.write('path create Analysis\n\n')
+        
+        f.write(f'path add_module main fix_mdst {module}\n\n')
+        
+        f.write('path add_condition main >:0:Analysis\n')
+        f.write('path add_condition main =<:0:KILL\n')
+        f.write(f'path add_module Analysis {module}\n\n')
+        
+        # Set parameters
+        f.write(f'module put_parameter {module} output_filename\{output_root}\n' )
+        f.write(f'module put_parameter {module} isMCSample\\0\n\n')
+        
+        # Initialize
+        f.write('initialize\n')
+        
+        # Process URL
+        f.write(f'process_url {url}\n\n')
+        
+        # Terminate
+        f.write('terminate\n')
+        f.write('EOF\n')
+        f.write('exit\n')
+        
+        # Make script executable
+        os.chmod(filename, 0o755)
+
+
+
+def main():
+    # Get the path of the provided Python script
+    parser = argparse.ArgumentParser(description="Process Belle data")
+    parser.add_argument("script_path", help="Path to the analysis Python script or BASF .so file")
+    parser.add_argument("--all", action="store_true", help="Process all data types")
+
+    parser.add_argument("--framework", "-fw", type=str, choices=['basf', 'b2bii'], default='b2bii',
+                    help="Choose analysis framework (default: b2bii)")
+
+    # Add options for each data type using aliases for better user experience
+    data_group = parser.add_argument_group('Data Types')
+    for alias in sorted(ALIAS_TO_DATA_TYPE.keys()):
+        data_type = ALIAS_TO_DATA_TYPE[alias]
+        data_group.add_argument(f"--{alias}", action="store_true", 
+                            help=f"Process {data_type} ({len(DATA_CONFIGS[data_type])} configs)")
+    
+    # Add experiment filter option
+    filter_group = parser.add_argument_group('Filters')
+    filter_group.add_argument("--exp", type=int, help="Filter by experiment number")
+    filter_group.add_argument("--list", action="store_true", help="List available data types and experiments")
+    
+    # Add skim type option
+    config_group = parser.add_argument_group('Configuration')
+    config_group.add_argument("--skim-type", type=str, default="HadronBorJ",
+                          help="Skim type to use (default: HadronBorJ)")
+    
+    args = parser.parse_args()
+    
+    # List data types if requested
+    if args.list:
+        print("Available data types:")
+        for data_type, alias in DATA_TYPE_ALIASES.items():
+            print(f"  --{alias.ljust(8)} : {data_type.ljust(15)} ({len(DATA_CONFIGS[data_type])} configs)")
+        
+        # List all experiments
+        all_exps = set()
+        for configs in DATA_CONFIGS.values():
+            for config in configs:
+                all_exps.add(config['exp'])
+        print("\nAvailable experiments:")
+        print(f"  {', '.join(str(exp) for exp in sorted(all_exps))}")
+        return
+    
+    # Verify the script path exists
+    script_path = os.path.abspath(args.script_path)
+    if not os.path.exists(script_path):
+        print(f"Error: Script '{script_path}' does not exist.")
+        return
+    
+    # Use the directory of the script as the output directory
+    output_dir = os.path.dirname(script_path)
+    
+    # Determine which data types to process
+    types_to_process = []
+    if args.all:
+        types_to_process = list(DATA_CONFIGS.keys())
+    else:
+        types_to_process = [ALIAS_TO_DATA_TYPE[alias] for alias, enabled in 
+                           vars(args).items() if enabled and alias in ALIAS_TO_DATA_TYPE]
+    
+    # If no specific type is selected, print help
+    if not types_to_process:
+        parser.print_help()
+        print("\nNo data types selected. Please specify at least one data type or use --all.")
+        return
+    
+    # Process selected data types
+    total_jobs = 0
+    for data_type in types_to_process:
+        configs = DATA_CONFIGS[data_type]
+        print(f"\nProcessing {data_type} data ({len(configs)} configurations)")
+        
+        # Apply exp filter if provided
+        if args.exp:
+            configs = [c for c in configs if c["exp"] == args.exp]
+            if not configs:
+                print(f"  No configurations for experiment {args.exp} in {data_type}")
+                continue
+        
+        if args.framework == 'basf':
+            submit_job_func = submit_job_basf
+
+        else:
+            submit_job_func = submit_job
+
+        for config in configs:
+            total_jobs += submit_job_func(
+                config['exp'],
+                config['run_start'],
+                config['run_end'],
+                args.skim_type,
+                data_type,
+                #config['runs_per_job'],
+                5,
+                output_dir,
+                script_path
+            )
+    
+    print(f"\n{'='*60}")
+    print(f"Total jobs submitted: {total_jobs}")
+    print(f"Output directory: {output_dir}")
+    print(f"Log files will be in: {output_dir}/log/<data_type>")
+    print(f"Root files will be in: {output_dir}/<data_type>")
+
+if __name__ == "__main__":
+    main()
