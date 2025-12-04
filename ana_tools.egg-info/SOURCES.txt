@@ -4,9 +4,11 @@ DRAW/AutoDraw.py
 DRAW/Ploter.py
 DRAW/__init__.py
 DRAW/draw_rho00_summary.py
+FIT/__helper_functions.py
 FIT/__init__.py
 FIT/fit_functions.py
 FIT/fit_tools.py
+FIT/relativistic_breit_wigner.py
 OFFLINE_PROCESS/RDataFrame_process.py
 OFFLINE_PROCESS/__init__.py
 OFFLINE_PROCESS/gMC_TOPOANA/__init__.py

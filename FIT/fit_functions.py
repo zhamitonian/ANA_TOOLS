@@ -29,12 +29,13 @@ def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Option
         **kwargs: Additional keyword arguments:
             branches_name: List of branch names to combine (e.g., ["phi1_M", "phi2_M"])
     """
-    reso, mass, width = "phi", 1.0195, 0.004249
-
+    #reso, mass, width = "phi", 1.0195, 0.004249
+    reso, mass, width = kwargs.get("particle_config", ("phi", 1.0195, 0.004249))
+    x_min, x_max, nbin = kwargs.get("fit_config", (1, 1.06, 60))
     #x_min, x_max, nbin = 0.99, 1.15, 100 # ralf siedl  
-    x_min, x_max, nbin = 1, 1.06, 60
+    #x_min, x_max, nbin = 1, 1.06, 60
 
-    var_config = [("phi_M", x_min, x_max)]  
+    var_config = [(f"{reso}_M", x_min, x_max)]  
     tools = FIT_UTILS(log_file=log_file, var_config= var_config)
 
     branches_name = kwargs.get('branches_name', None)
@@ -59,9 +60,11 @@ def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Option
         print(f"Dataset created with {dataset.numEntries()} entries")
         
         # BW 
-        #w.factory(f"BreitWigner::reso_bw({reso}_M, {mass}, {width})")
+        w.factory(f"BreitWigner::reso_bw({reso}_M, {mass}, {width})")
+        #w.factory(f"BreitWigner::reso_bw({reso}_M, mass[{mass}, 3.09, 3.11], width[{width},1e-5, 0.01])")
+        #w.factory(f"BreitWigner::sig_pdf({reso}_M, {mass}, {width})")
         #w.factory(f"BreitWigner::reso_bw({reso}_M, mass[{mass}, 1.01, 1.03], width[{width}, 0.001, 0.01])")
-        w.factory(f"BreitWigner::sig_pdf({reso}_M, mass[{mass}, 1.01, 1.03], width[{width}, 0.001, 0.01])")
+        #w.factory(f"BreitWigner::sig_pdf({reso}_M, mass[{mass}, 1.01, 1.03], width[{width}, 0.001, 0.01])")
 
         # rela BW
         #formula = f"({mass} * {width}) / (pow({reso}_M*{reso}_M - {mass}*{mass}, 2) + pow({mass}*{width}, 2))"
@@ -74,8 +77,9 @@ def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Option
         #define_relativistic_breit_wigner(w, reso, mass, width)
 
         #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0, -0.0001, 0.0001], smear_sigma[0.0008, 0.0002, 0.0014])")
-        w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.00083, 0.0002, 0.0014])")
-        #w.factory(f"FCONV::sig_pdf({reso}_M, reso_bw, smear)")
+        #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.00083, 0.0002, 0.0014])")
+        w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.0002, 0.001, 0.02])") # for jpsi fitting
+        w.factory(f"FCONV::sig_pdf({reso}_M, reso_bw, smear)")
         
         # Polynomial, Chebychev, ArgusBG, or reversed Argus background PDF selection
         which_bkg = kwargs.get("which_bkg", 0)  # 0: Chebychev, 1: Polynomial, 2: ArgusBG, 3: reversed Argus 
