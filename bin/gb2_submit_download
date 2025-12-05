@@ -1,0 +1,219 @@
+#!/usr/bin/env python3
+# filepath: /group/belle2/users2022/wangz/data_gMC/gb2_submit_download.py
+
+import sys
+import os
+import subprocess
+import re
+import time
+from datetime import datetime
+import argparse
+
+# Configuration variables
+basf2_version = "light-2409-toyger"
+
+# Data experiment configurations - hadron skim data
+data_experiments = { # 4S - 494.99  ,  offres - 61.05 , 5S - 19.54
+    "4S_Moriond2022": "/belle/collection/Data/Moriond2022_hadron_4S_v1",  # exp 7-12,14-18  189.26fb-1  6115 jobs
+    "4S_Moriond2023": "/belle/collection/Data/Moriond2023_prompt_hadron_4S_v1",  # exp 20-26 176.29fb-1  3580 jobs
+    "4S_24": "/belle/collection/Data/exp30_to_exp35_had_4S_v1", # exp 30-35 129.45 fb-1
+    "4Soffres_Moriond2022": "/belle/collection/Data/Moriond2022_hadron_4Soffres_v1",  # exp 7-12,14-18  17.99fb-1  558 jobs
+    "4Soffres_Moriond2023": "/belle/collection/Data/Moriond2023_prompt_hadron_4S_offres_v1",  # exp 20-26 24.38fb-1  434 jobs
+    "4Soffres_24": "/belle/collection/Data/exp30_to_exp35_had_4Soffres_v1", # exp 30-35 17.68 fb-1
+    "5Sscan_10657": "/belle/collection/Data/Moriond2023_prompt_hadron_5Sscan_10657_v1",  # 3.52fb-1  82 jobs
+    "5Sscan_10706": "/belle/collection/Data/Moriond2023_prompt_hadron_5Sscan_10706_v1",  # 1.63fb-1  49 jobs
+    "5Sscan_10751": "/belle/collection/Data/Moriond2023_prompt_hadron_5Sscan_10751_v1",  # 9.7fb-1  178 jobs
+    "5Sscan_10810": "/belle/collection/Data/Moriond2023_prompt_hadron_5Sscan_10810_v1",  # 4.69fb-1  78 jobs
+}
+
+# MC experiment configurations - MCrd prompt
+mc_experiments_prompt = {
+    # 4S on-resonance
+    "4S_onres_mixed": "/belle/collection/MC/MC15rd_mixed_exp20-26_4S_v2",
+    "4S_onres_charged": "/belle/collection/MC/MC15rd_charged_exp20-26_4S_v2",
+    "4S_onres_ssbar": "/belle/collection/MC/MC15rd_ssbar_exp20-26_4S_v2",
+    "4S_onres_uubar": "/belle/collection/MC/MC15rd_uubar_exp20-26_4S_v2",
+    "4S_onres_ddbar": "/belle/collection/MC/MC15rd_ddbar_exp20-26_4S_v2",
+    "4S_onres_ccbar": "/belle/collection/MC/MC15rd_ccbar_exp20-26_4S_v2",
+
+    # 4S off-resonance
+    "4S_offres_ssbar": "/belle/collection/MC/MC15rd_ssbar_exp25_4S_offres_v1",
+    "4S_offres_uubar": "/belle/collection/MC/MC15rd_uubar_exp25_4S_offres_v1",
+    "4S_offres_ddbar": "/belle/collection/MC/MC15rd_ddbar_exp25_4S_offres_v1",
+    "4S_offres_ccbar": "/belle/collection/MC/MC15rd_ccbar_exp25_4S_offres_v1",
+
+    # 5S scan
+    "5S_scan_mixed": "/belle/collection/MC/MC15rd_mixed_exp21_5S_scan_v1",
+    "5S_scan_charged": "/belle/collection/MC/MC15rd_charged_exp21_5S_scan_v1",
+    "5S_scan_ssbar": "/belle/collection/MC/MC15rd_ssbar_exp21_5S_scan_v1",
+    "5S_scan_uubar": "/belle/collection/MC/MC15rd_uubar_exp21_5S_scan_v1",
+    "5S_scan_ddbar": "/belle/collection/MC/MC15rd_ddbar_exp21_5S_scan_v1",
+    "5S_scan_ccbar": "/belle/collection/MC/MC15rd_ccbar_exp21_5S_scan_v1",
+}
+
+# MC experiment configurations - MCrd proc13
+mc_experiments_proc13 = {
+    "4S_onres_mixed_proc": "/belle/collection/MC/MC15rd_mixed_exp7-18_4S_v3",
+    "4S_onres_charged_proc": "/belle/collection/MC/MC15rd_charged_exp7-18_4S_v3",
+    "4S_onres_ssbar_proc": "/belle/collection/MC/MC15rd_ssbar_exp7-18_4S_v3",
+    "4S_onres_uubar_proc": "/belle/collection/MC/MC15rd_uubar_exp7-18_4S_v3",
+    "4S_onres_ddbar_proc": "/belle/collection/MC/MC15rd_ddbar_exp7-18_4S_v3",
+    "4S_onres_ccbar_proc": "/belle/collection/MC/MC15rd_ccbar_exp7-18_4S_v3",
+
+    "4S_offres_ssbar_proc": "/belle/collection/MC/MC15rd_ssbar_proc13_4S_offres_v1",
+    "4S_offres_uubar_proc": "/belle/collection/MC/MC15rd_uubar_proc13_4S_offres_v1",
+    "4S_offres_ddbar_proc": "/belle/collection/MC/MC15rd_ddbar_proc13_4S_offres_v1",
+    "4S_offres_ccbar_proc": "/belle/collection/MC/MC15rd_ccbar_proc13_4S_offres_v1",
+}
+
+def submit_job(exp_name, input_path, project_name, basf2_version, script_path, sandbox_files):
+    """Submit job to grid"""
+    print(f"Running {exp_name} to Grid! Input: {input_path}")
+    
+    # Extract just the script name without the path or extension
+    script_name = os.path.basename(script_path)
+    if script_name.endswith('.py'):
+        script_name = script_name[:-3]
+    
+    # Build the command
+    cmd = f"gbasf2 {script_path} -p {project_name}_{exp_name} -s {basf2_version} -i {input_path} -n 1"
+    
+    # Add sandbox files if provided
+    if sandbox_files:
+        cmd += f" --input_sandboxfiles {sandbox_files}"
+    
+    # Add force flag
+    cmd += " --force"
+    
+    # Execute the command
+    subprocess.run(cmd, shell=True, check=True)
+    time.sleep(1)
+
+def download_data(exp_name, project_name):
+    """Download job data"""
+    remote_path = f"/belle/user/zwang/{project_name}_{exp_name}"
+    
+    print(f"Downloading from cloud to KEK... Data {exp_name}")
+    cmd_kek = f"gb2_ds_rep {remote_path} -d KEK-DISK-TMP-SE -f"
+    subprocess.run(cmd_kek, shell=True, check=True)
+    time.sleep(1)
+    
+    print(f"Downloading from KEK to local... Data {exp_name}")
+    # Schedule the download command to run 2 hour later using 'at'
+    cmd_local = f"echo 'gb2_ds_get --se KEK-DISK-TMP-SE {remote_path} -f' | at now + 2 hour"
+    subprocess.run(cmd_local, shell=True, check=True)
+    time.sleep(1)
+
+def is_experiment_energy(exp_name, energy_point):
+    """Check if experiment belongs to specified energy point"""
+    if energy_point == "all":
+        return True
+    
+    # Check if experiment name contains the energy point
+    if energy_point == "4S" and "4S" in exp_name and "offres" not in exp_name:
+        return True
+    elif energy_point == "5S" and "5S" in exp_name:
+        return True
+    elif energy_point == "offres" and "offres" in exp_name:
+        return True
+    
+    return False
+
+def validate_date(date_str):
+    """Validate date format and range"""
+    pattern = r"^([0-9]{2})(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)([0-9]{2})$"
+    match = re.match(pattern, date_str)
+    
+    if not match:
+        return False
+    
+    day = int(match.group(1))
+    year = int(match.group(3))
+    
+    if not (1 <= day <= 31) or not (0 <= year <= 99):
+        return False
+        
+    return True
+
+def main():
+    current_date = datetime.now().strftime("%d%b%y")  # Default to current date in DDMMMYY format
+
+    # Parse arguments
+    parser = argparse.ArgumentParser(description="Submit or download Belle II jobs")
+    parser.add_argument("data_type", choices=["data", "mc", "mc_prompt", "mc_proc13"], 
+                        help="Type of experiment: data, mc, mc_prompt, mc_proc13")
+    parser.add_argument("mode", choices=["submit", "download"], 
+                        help="Mode: submit or download jobs")
+    parser.add_argument("--date", help="Date in format DDMMMYY (e.g., 25Feb25)", default=current_date)
+    parser.add_argument("--number", type=int, choices=range(1, 10), default=1, 
+                        help="Batch number (1-9)")
+    parser.add_argument("--energy", choices=["4S", "5S", "offres", "all"], default="all", 
+                        help="Energy point filter: 4S, 5S, offres or all")
+    parser.add_argument("--script", 
+                        help="Path to the analysis script (required for submit mode)")
+    parser.add_argument("--sandbox", 
+                        help="Additional sandbox files to include (comma-separated)",
+                        default = "./STEERING_TOOLS/")
+    parser.add_argument("experiments", nargs="*", help="Experiment names to process")
+    
+    args = parser.parse_args()
+    
+    # Validate script path when in submit mode
+    if args.mode == "submit" and not args.script:
+        parser.error("--script is required when mode is 'submit'")
+    
+    # Validate date
+    if not validate_date(args.date):
+        print("Error: Invalid date format or range. Use DDMMMYY format (e.g., 25Feb25)")
+        sys.exit(1)
+    
+    # Set current date and project name
+    current_date = args.date
+    experiment_type = args.data_type
+    project_suffix = "D" if experiment_type == "data" else "MC"
+    project_name = f"{current_date}{project_suffix}{args.number}"
+    print(f"Project name: {project_name}")
+    
+    # Determine which experiments to process
+    experiments = args.experiments
+    if not experiments:
+        if experiment_type == "data":
+            experiments = list(data_experiments.keys())
+        elif experiment_type == "mc_prompt":
+            experiments = list(mc_experiments_prompt.keys())
+        elif experiment_type == "mc_proc13":
+            experiments = list(mc_experiments_proc13.keys())
+        elif experiment_type == "mc":
+            experiments = list(mc_experiments_prompt.keys()) + list(mc_experiments_proc13.keys())
+    
+    # Filter experiments by energy point
+    if args.energy != "all":
+        experiments = [exp for exp in experiments if is_experiment_energy(exp, args.energy)]
+        if not experiments:
+            print(f"No experiments found for energy point: {args.energy}")
+            sys.exit(0)
+        print(f"Filtered to {len(experiments)} experiments for energy point: {args.energy}")
+    
+    # Process experiments
+    if experiment_type == "data":
+        experiment_dict = data_experiments
+    elif experiment_type == "mc_prompt":
+        experiment_dict = mc_experiments_prompt
+    elif experiment_type == "mc_proc13":
+        experiment_dict = mc_experiments_proc13
+    elif experiment_type == "mc":
+        # Combine dictionaries for processing both types of MC
+        experiment_dict = {**mc_experiments_prompt, **mc_experiments_proc13}
+    
+    for exp in experiments:
+        if exp in experiment_dict:
+            if args.mode == "submit":
+                submit_job(exp, experiment_dict[exp], project_name, basf2_version, 
+                           args.script, args.sandbox)
+            elif args.mode == "download":
+                download_data(exp, project_name)
+        else:
+            print(f"Experiment '{exp}' not found in {experiment_type}. Skipping...")
+
+if __name__ == "__main__":
+    main()

@@ -16,7 +16,7 @@ from .STEERING_TOOLS import BelleAnalysisBase, ISRAnalysisTools
 from .OFFLINE_PROCESS import RDF_process, gMC_topoana, find_decay_indices
 from .PHY_CALCULATOR import PhysicsCalculator
 from .FIT import FIT_UTILS, QUICK_FIT, perform_2dfit, perform_resonance_fit, perform_chisq_fit,get_effCurve
-from belle_run_manager import BelleRunManager, RunEntry
+from .bin.belle_run_manager import BelleRunManager, RunEntry
 
 # Define what gets imported with "from ANA_TOOLS import *"
 __all__ = [
