@@ -9,7 +9,7 @@ Supports both basf and basf2 (b2bii) frameworks.
 
 Author: GitHub Copilot
 Date: December 5, 2025
-version: 2.1
+version: 2.2
 """
 
 import argparse
@@ -72,7 +72,7 @@ class BelleMCProcessor:
     
     def _submit_b2bii_job(self, exp: int, run_start: int, run_end: int,
                          event_type: str, data_type: str, stream_no: int,
-                         output_dir: str, script_path: str) -> None:
+                         output_dir: str, script_path: str, belle_level:str = "caseB") -> None:
         """Submit b2bii job for generic MC"""
         log_path = os.path.join(output_dir, "log", data_type)
         root_path = os.path.join(output_dir, data_type)
@@ -81,7 +81,7 @@ class BelleMCProcessor:
         
         job_name = f"{event_type}_e{exp}r{run_start}_{run_end}_st{stream_no}"
         url_dataset = self._get_url_dataset(data_type)
-        url = f"http://bweb3/montecarlo.php?ex={exp}&rs={run_start}&re={run_end}&ty={event_type}&dt={url_dataset}&bl=caseB&st={stream_no}"
+        url = f"http://bweb3/montecarlo.php?ex={exp}&rs={run_start}&re={run_end}&ty={event_type}&dt={url_dataset}&bl={belle_level}&st={stream_no}"
         root_file = os.path.join(root_path, f"{job_name}.root")
         log_file = os.path.join(log_path, f"{job_name}.log")
         
@@ -91,7 +91,7 @@ class BelleMCProcessor:
     
     def _submit_basf_job(self, exp: int, run_start: int, run_end: int,
                         event_type: str, data_type: str, stream_no: int,
-                        output_dir: str, so_file: str) -> None:
+                        output_dir: str, so_file: str, belle_level:str = "caseB") -> None:
         """Submit basf job for generic MC"""
         log_path = os.path.join(output_dir, "log", data_type)
         root_path = os.path.join(output_dir, data_type)
@@ -102,7 +102,7 @@ class BelleMCProcessor:
         
         job_name = f"{event_type}_e{exp}r{run_start}_{run_end}_st{stream_no}"
         url_dataset = self._get_url_dataset(data_type)
-        url = f"http://bweb3/montecarlo.php?ex={exp}&rs={run_start}&re={run_end}&ty={event_type}&dt={url_dataset}&bl=caseB&st={stream_no}"
+        url = f"http://bweb3/montecarlo.php?ex={exp}&rs={run_start}&re={run_end}&ty={event_type}&dt={url_dataset}&bl={belle_level}&st={stream_no}"
         root_file = os.path.join(root_path, f"{job_name}.root")
         log_file = os.path.join(log_path, f"{job_name}.log")
         
@@ -231,6 +231,10 @@ class BelleMCProcessor:
                         if exp < 30 and dataset == "4S_offres":  # continuum
                             extra_stream += 10
                         adjusted_stream = stream_no + extra_stream
+
+                        belle_level = "caseB" 
+                        if exp == 61 and dataset in ["1S_offres"]:
+                            belle_level = "b20081107_1418"
                         
                         # Submit jobs in batches
                         for i in range(0, len(group), runs_per_job):
@@ -240,10 +244,10 @@ class BelleMCProcessor:
                             
                             if self.framework == 'basf':
                                 self._submit_basf_job(exp, run_start, run_end, event_type,
-                                                    dataset, adjusted_stream, output_dir, script_path)
+                                                    dataset, adjusted_stream, output_dir, script_path, belle_level)
                             else:  # b2bii
                                 self._submit_b2bii_job(exp, run_start, run_end, event_type,
-                                                     dataset, adjusted_stream, output_dir, script_path)
+                                                     dataset, adjusted_stream, output_dir, script_path, belle_level)
                             
                             total_jobs += 1
         
@@ -367,3 +371,14 @@ Examples:
 
 if __name__ == "__main__":
     main()
+
+
+"""
+version log:
+v2.1
+Date: December 5, 2025
+
+v2.2
+Date: December 9, 2025
+handle belle_level para for exp11 1S_offres , with dataset b20081107_1418 not caseB
+"""
