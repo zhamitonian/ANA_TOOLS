@@ -18,8 +18,6 @@ from math import sqrt
 
 def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Optional[str]=None, bin_fit_range:Optional[str]=None, binned_fit = False,joint_fit:bool=False, **kwargs):
     """
-    Perform sPlot analysis for digamma to diphi process
-    
     Args:
         input_tree: Input ROOT TTree with the data
         output_dir: Output directory for plots and results
@@ -28,6 +26,9 @@ def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Option
         binned_fit: Whether to perform binned fit or unbinned fit
         **kwargs: Additional keyword arguments:
             branches_name: List of branch names to combine (e.g., ["phi1_M", "phi2_M"])
+            particle_config: Tuple containing (reso, mass, width) (default: ("phi", 1.0195, 0.004249))
+            fit_config: Tuple containing (x_min, x_max, nbin) (default: (1, 1.06, 60))
+            if_save: Wheter to save coordinate root file used to make dataset
     """
     #reso, mass, width = "phi", 1.0195, 0.004249
     reso, mass, width = kwargs.get("particle_config", ("phi", 1.0195, 0.004249))
@@ -43,7 +44,7 @@ def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Option
     # redirect log
     with tools.redirect_output():
         # Add some useful information at the beginning of the log
-        print(f"=== Starting sPlot Analysis ===")
+        print(f"=== Starting Fitting ===")
         print(f"Output file: {output_dir}")
         if branches_name is not None:
             print(f"Branch names to combine: {branches_name}")
@@ -51,17 +52,46 @@ def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Option
         print(f"===============================")
         
         w = ROOT.RooWorkspace("w", "workspace")
+        # Enforce deterministic behavior: disable implicit MT 
+        #ROOT.DisableImplicitMT()
         
-        dataset = tools.handle_dataset(input_tree, w, branches_name, binned_fit, nbin )
+        if_save = kwargs.get("if_save", False)
+        dataset = tools.handle_dataset(input_tree, w, branches_name, binned_fit, nbin, save_rootFile= if_save)
+
         # Save dataset to workspace
         w.Import(dataset, ROOT.RooFit.Rename("dataset"))
 
-        print(input_tree.GetEntries())
-        print(f"Dataset created with {dataset.numEntries()} entries")
-        
         # BW 
-        w.factory(f"BreitWigner::reso_bw({reso}_M, {mass}, {width})")
-        #w.factory(f"BreitWigner::reso_bw({reso}_M, mass[{mass}, 3.09, 3.11], width[{width},1e-5, 0.01])")
+        which_sig = kwargs.get("which_sig", 0)
+        bw_fix = kwargs.get("bw_fix", True)
+        conv_gauss = kwargs.get("conv_gauss", False)
+        
+        sig_func = ['bw', 'rela_bw', 'double_gauss'][which_sig]
+
+        if sig_func == "double_gauss":
+            w.factory(f"Gaussian::gauss1_{reso}({reso}_M, mean1_{reso}[{mass}, {mass - 0.01}, {mass + 0.01}], sigma1_{reso}[0.002, 0.0001, 0.01])")
+            w.factory(f"Gaussian::gauss2_{reso}({reso}_M, mean1_{reso}, sigma2_{reso}[0.01, 0.0001, 0.1])")  
+            w.factory(f"SUM::sig_pdf(frac_{reso}[0.5, 0, 1] * gauss1_{reso}, gauss2_{reso})")  
+            #w.factory(f"Gaussian::sig_pdf({reso}_M, mean1_{reso}[{mass}, {mass - 0.01}, {mass + 0.01}], sigma1_{reso}[0.002, 0.0001, 0.01])")
+        elif sig_func == "bw":
+            if bw_fix:
+                w.factory(f"BreitWigner::reso_bw({reso}_M, {mass}, {width})")
+            else:
+                w.factory(f"BreitWigner::reso_bw({reso}_M, mass[{mass}, {mass - 0.01}, {mass + 0.01}], width[{width}, {width*0.5}, {width*1.5}])")
+        elif sig_func == "rela_bw":
+            pass # to be implemented later
+
+        if sig_func in ["bw", "rela_bw"] and conv_gauss:
+            w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.001, 0.0002, 0.01])")
+            w.factory(f"FCONV::sig_pdf({reso}_M, reso_bw, smear)")
+        else:
+            print("Skipping convolution for double_gauss signal PDF")
+            if w.pdf("reso_bw"):
+                w.Import(w.pdf("reso_bw"), ROOT.RooFit.Rename("sig_pdf"))
+            else:
+                print("Warning: reso_bw PDF not found in workspace, cannot import as sig_pdf.")
+
+        #w.factory(f"BreitWigner::reso_bw({reso}_M, mass[{mass}, {mass - 100*width}, {mass + 100*mass}], {width})")
         #w.factory(f"BreitWigner::sig_pdf({reso}_M, {mass}, {width})")
         #w.factory(f"BreitWigner::reso_bw({reso}_M, mass[{mass}, 1.01, 1.03], width[{width}, 0.001, 0.01])")
         #w.factory(f"BreitWigner::sig_pdf({reso}_M, mass[{mass}, 1.01, 1.03], width[{width}, 0.001, 0.01])")
@@ -78,12 +108,14 @@ def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Option
 
         #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0, -0.0001, 0.0001], smear_sigma[0.0008, 0.0002, 0.0014])")
         #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.00083, 0.0002, 0.0014])")
-        w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.0002, 0.001, 0.02])") # for jpsi fitting
-        w.factory(f"FCONV::sig_pdf({reso}_M, reso_bw, smear)")
+        #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.00083])")
+        #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.0002, 0.001, 0.008])") # for jpsi fitting
+        # Fix cache binning for FFT convolution to avoid run-to-run variation
+        #w.factory(f"FCONV::sig_pdf({reso}_M, reso_bw, smear)")
         
         # Polynomial, Chebychev, ArgusBG, or reversed Argus background PDF selection
-        which_bkg = kwargs.get("which_bkg", 0)  # 0: Chebychev, 1: Polynomial, 2: ArgusBG, 3: reversed Argus 
-        bkg_order = kwargs.get("bkg_order", 2)  # Order of polynomial/Chebychev (default: 1)
+        which_bkg = kwargs.get("which_bkg", 1)  # 0: Chebychev, 1: Polynomial, 2: ArgusBG, 3: reversed Argus 
+        bkg_order = kwargs.get("bkg_order", 1)  # Order of polynomial/Chebychev (default: 1)
         bkg_funcs = ["Chebychev", "Polynomial", "ArgusBG", "revArgus", "custom", "custom2"]
         bkg_func = bkg_funcs[which_bkg]
 
@@ -118,7 +150,8 @@ def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Option
             w.factory("d[0.1, -10, 10]")
             w.factory(f"RooGenericPdf::bkg_pdf('{formula}', {{{reso}_M, m0, a, b, c, d}})")
 
-        w.factory("SUM::model(nsig[20000, 0, 400000] * sig_pdf, nbkg[45000, 0, 200000] * bkg_pdf)")
+        #w.factory("SUM::model(nsig[20000, 0, 2000000] * sig_pdf, nbkg[45000, 0, 2000000] * bkg_pdf)")
+        w.factory("SUM::model(nsig[20000, 0, 200000000] * sig_pdf, nbkg[45000, 0, 2000000] * bkg_pdf)")
 
         # Perform fit
         model = w.pdf("model")
@@ -137,14 +170,35 @@ def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Option
         
         if joint_fit:
             return w 
+        ROOT.Math.MinimizerOptions.SetDefaultMaxFunctionCalls(500000)
 
+        print("Default minimizer:", ROOT.Math.MinimizerOptions.DefaultMinimizerType())
+        print("Default algorithm:", ROOT.Math.MinimizerOptions.DefaultMinimizerAlgo())
+        print("Default strategy:", ROOT.Math.MinimizerOptions.DefaultStrategy())
+        print("Default max calls:", ROOT.Math.MinimizerOptions.DefaultMaxFunctionCalls())
+        
         result = model.fitTo(dataset, 
-                             rf.Save(True), 
-                             rf.NumCPU(4), 
-                             rf.PrintLevel(0),
-                             rf.Strategy(1))
-                             #rf.Minimizer("Minuit2"))
+                     rf.Save(True),
+                     rf.NumCPU(4),
+                     rf.Strategy(2),
+                     rf.Minimizer("Minuit2", "Migrad"),
+                     rf.PrintLevel(3))
 
+        status_codes = {
+            0: "successful fit",
+            1: "covariance was made positive definite",
+            2: "Hesse is invalid",
+            3: "EDM is above max",
+            4: "Reached call limit",
+            5: "other failure"
+        }
+        print("*" * 30)
+        print(f"Fit status code: {result.status()} ({status_codes.get(result.status(), 'unknown status code')})")
+        print("Covariance quality:", result.covQual())
+        print("Estimated distance to minimum (EDM):", result.edm())
+        ok = (result.status() == 0) and (result.covQual() >= 2) and (result.edm() < 1e-3)
+        print("fit ok?", ok)
+        print("*" * 30)
 
         # --------------------------------------- splot ---------------------------------------
         # sPlot only for unbinned fits
@@ -286,7 +340,8 @@ def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Option
 
             leg.AddEntry(0, "N_{sig} = " + f"{w.var('nsig').getVal():.1f} #pm {w.var('nsig').getError():.1f}", "")
             #leg.AddEntry(0, "#sigma_{gauss} = " + f"{w.var('smear_sigma').getVal():.2e} #pm {w.var('smear_sigma').getError():.2e}", "")
-            leg.AddEntry(0, "#sigma_{gauss} = " + f"{(w.var('smear_sigma').getVal()*1000):.2f} #pm {(w.var('smear_sigma').getError()*1000):.2f} MeV", "")
+            if conv_gauss:
+                leg.AddEntry(0, "#sigma_{gauss} = " + f"{(w.var('smear_sigma').getVal()*1000):.2f} #pm {(w.var('smear_sigma').getError()*1000):.2f} MeV", "")
 
             if bin_fit_range:
                 # Add each dimension on a separate line
@@ -312,7 +367,13 @@ def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Option
             framex_pull.GetYaxis().SetRangeUser(-5, 5)
             framex_pull.GetYaxis().SetLabelSize(0.1)
             framex_pull.GetXaxis().SetLabelSize(0.13)
-            x_title = "M_{K^{+}K^{-}} (GeV/c^{2})" if var_name == "phi_M" else "M_{reso}"
+            name_dict = {"phi_M":"M_{K^{+}K^{-}}", "jpsi_M":"M_{#phi K^{+}K^{-}}", 
+                         "Ks_M":"M_{#pi^{+}#pi^{-}}"}
+
+            if var_name in name_dict.keys():
+                x_title = name_dict[var_name] + " (GeV/c^{2})"
+            else:
+                x_title = var_name + " (GeV/c^{2})"
             framex_pull.GetXaxis().SetTitle(x_title)
             framex_pull.GetXaxis().CenterTitle()
             framex_pull.GetXaxis().SetTitleSize(0.12)
@@ -454,7 +515,7 @@ def perform_2dfit(tree:ROOT.TTree, output_dir:dir, log_file = None, bin_fit_rang
         
         result = model.fitTo(dataset, 
                              rf.Save(True), 
-                             rf.NumCPU(4), 
+                             rf.NumCPU(1), 
                              rf.PrintLevel(0),
                              rf.Strategy(1))
                              #rf.Minimizer("Minuit2"))
