@@ -5,9 +5,6 @@ from typing import Tuple, List, Optional, Callable, Dict, Any, Union
 import time
 import numpy as np
 import argparse
-from abc import ABC, abstractmethod
-from DRAW import style_draw
-from PHY_CALCULATOR import PhysicsCalculator
 
 import ROOT
 from ROOT import RooFit as rf
@@ -35,7 +32,11 @@ class FIT_UTILS():
         if log_file is None:
             yield
             return
-            
+        
+        # Flush Python buffers before redirecting
+        sys.stdout.flush()
+        sys.stderr.flush()
+        
         # Save original file descriptors
         original_stdout_fd = sys.stdout.fileno()
         original_stderr_fd = sys.stderr.fileno()
@@ -44,24 +45,30 @@ class FIT_UTILS():
         saved_stdout = os.dup(original_stdout_fd)
         saved_stderr = os.dup(original_stderr_fd)
         
+        # Open log file
+        log_fd = os.open(log_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
+        
         try:
-            # Open log file
-            log_fd = os.open(log_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC)
-            
             # Replace standard file descriptors with log file
             os.dup2(log_fd, original_stdout_fd)
             os.dup2(log_fd, original_stderr_fd)
             
+            # Close log file descriptor (no longer needed, fds are duplicated)
+            os.close(log_fd)
+            
             yield
+            
+            # Final flush before restoring
+            sys.stdout.flush()
+            sys.stderr.flush()
         finally:
             # Restore original file descriptors
             os.dup2(saved_stdout, original_stdout_fd)
             os.dup2(saved_stderr, original_stderr_fd)
             
-            # Close all duplicated descriptors
+            # Close saved descriptors
             os.close(saved_stdout)
             os.close(saved_stderr)
-        os.close(log_fd)
 
 
     def handle_dataset(self, input_tree: ROOT.TTree, 
@@ -131,19 +138,29 @@ class FIT_UTILS():
                 return dataset
 
             # Create empty dataset for combining branches
+            # Add event_idx and cand_idx to track original tree structure
+            workspace.factory("event_idx[0, 1000000000]")  # Original event number
+            workspace.factory("cand_idx[0, 100]")  # Candidate index within event
+            arg_set.add(workspace.var("event_idx"))
+            arg_set.add(workspace.var("cand_idx"))
+            
             dataset = ROOT.RooDataSet("dataset", "Combined dataset", arg_set)
             other_vars = [workspace.var(config[0]) for config in var_configs[1:]]
+            event_idx_var = workspace.var("event_idx")
+            cand_idx_var = workspace.var("cand_idx")
 
             print(f"Combining branches: {branches_name}")
             total_entries = 0
 
             # Helper function to add entry to dataset
-            def add_entry(value):
+            def add_entry(value, evt_idx, cnd_idx):
                 nonlocal total_entries
                 if var_min <= value <= var_max:
                     fit_var.setVal(value)
                     for var, other_val in zip(other_vars, other_values):
                         var.setVal(other_val)
+                    event_idx_var.setVal(evt_idx)
+                    cand_idx_var.setVal(cnd_idx)
                     dataset.add(arg_set)
                     total_entries += 1
             
@@ -164,8 +181,8 @@ class FIT_UTILS():
                     for branch_name in branches_name:
                         try:
                             branch_vec = getattr(event, branch_name)
-                            for value in branch_vec:
-                                add_entry(value)
+                            for cand_idx, value in enumerate(branch_vec):
+                                add_entry(value, i, cand_idx)
                         except AttributeError:
                             print(f"Warning: Branch {branch_name} not found in event {i}")
                             continue
@@ -174,7 +191,7 @@ class FIT_UTILS():
                     for branch_name in branches_name:
                         try:
                             branch_value = getattr(event, branch_name)
-                            add_entry(branch_value)
+                            add_entry(branch_value, i, 0)  # Scalar branch uses cand_idx=0
                         except AttributeError:
                             print(f"Warning: Branch {branch_name} not found in event {i}")
                             continue
@@ -193,8 +210,11 @@ class FIT_UTILS():
             hist_model = ROOT.RDF.TH1DModel(hist_name, hist_name, 
                                            hist_bins, var_min, var_max)
 
+            # Get variable name string for RDataFrame
+            fit_var_name = var_configs[0][0]
+
             if branches_name is None or len(branches_name) == 0:
-                histogram = df.Histo1D(hist_model, fit_var).GetValue()
+                histogram = df.Histo1D(hist_model, fit_var_name).GetValue()
             else:
                 hists = []
                 for branch in branches_name:
@@ -249,14 +269,17 @@ class QUICK_FIT():
 
     def __init__(self,
                  fit_function: Callable, 
-                 bin_var_config: Optional[List[Tuple[str, float, float, int]]] = None,
+                 bin_var_config: Optional[List[Tuple]] = None,
                  tree_path: str = "",
                  output_dir: str = "",
                  binned_fit: bool = False):
         """
         Args:
             fit_function: Callable fit function
-            bin_var_config: List of tuples (var_name, min, max, nbins) for binning
+            bin_var_config: List of tuples for binning. Two formats supported:
+                - Uniform binning: (var_name, min, max, nbins)
+                - Custom binning: (var_name, [bin_boundaries])
+                  where bin_boundaries is a list of boundary values (length = nbins + 1)
             tree_path: Path to input ROOT file
             output_dir: Output directory for fit results
             binned_fit: If True, perform binned fit; if False, unbinned fit
@@ -266,7 +289,8 @@ class QUICK_FIT():
         
         # Support backward compatibility
         if bin_var_config is not None:
-            if isinstance(bin_var_config, tuple) and len(bin_var_config) == 4:
+            if isinstance(bin_var_config, tuple):
+                # Single config provided
                 self.bin_var_configs = [bin_var_config]
             else:
                 self.bin_var_configs = bin_var_config
@@ -276,18 +300,45 @@ class QUICK_FIT():
         self.tree_path = tree_path
         self.output_dir = output_dir
         
-        # Calculate total bins
+        # Parse and normalize bin configurations
         self.n_dimensions = len(self.bin_var_configs)
         self.total_bins = 1
         self.bins_per_dim = []
+        self.binning_strategies = []  # 'uniform' or 'custom'
+        self.bin_boundaries = []  # Store boundaries for each dimension
         
-        for config in self.bin_var_configs:
-            n_bins = config[3]
-            self.bins_per_dim.append(n_bins)
-            self.total_bins *= n_bins
+        for dim_idx, config in enumerate(self.bin_var_configs):
+            var_name = config[0]
+            
+            if len(config) == 4:
+                # Uniform binning: (var_name, min, max, nbins)
+                min_val, max_val, n_bins = config[1], config[2], config[3]
+                self.binning_strategies.append('uniform')
+                self.bins_per_dim.append(n_bins)
+                # Generate uniform boundaries
+                boundaries = [min_val + i * (max_val - min_val) / n_bins for i in range(n_bins + 1)]
+                self.bin_boundaries.append(boundaries)
+                print(f"Dimension {dim_idx}: '{var_name}' - Uniform binning with {n_bins} bins [{min_val}, {max_val}]")
+                
+            elif len(config) == 2 and isinstance(config[1], (list, tuple)):
+                # Custom binning: (var_name, [bin_boundaries])
+                boundaries = list(config[1])
+                n_bins = len(boundaries) - 1
+                
+                if n_bins < 1:
+                    raise ValueError(f"Dimension {dim_idx}: Need at least 2 bin boundaries, got {len(boundaries)}")
+                
+                self.binning_strategies.append('custom')
+                self.bins_per_dim.append(n_bins)
+                self.bin_boundaries.append(boundaries)
+                print(f"Dimension {dim_idx}: '{var_name}' - Custom binning with {n_bins} bins, boundaries: {boundaries}")
+            else:
+                raise ValueError(f"Invalid bin_var_config format at index {dim_idx}: {config}. "
+                               f"Expected (var_name, min, max, nbins) or (var_name, [boundaries])")
+            
+            self.total_bins *= self.bins_per_dim[-1]
             
         print(f"Initialized {self.n_dimensions}D binning with {self.total_bins} total bins")
-        print(f"Fit mode: {'Binned' if self.binned_fit else 'Unbinned'}")
 
     def _get_bin_indices(self, flat_index: int) -> List[int]:
         """
@@ -341,11 +392,9 @@ class QUICK_FIT():
         ranges = []
         
         for dim_idx, bin_idx in enumerate(bin_indices):
-            var_name, min_val, max_val, n_bins = self.bin_var_configs[dim_idx]
-            bin_step = (max_val - min_val) / n_bins
-            
-            bin_min = min_val + bin_idx * bin_step
-            bin_max = min_val + (bin_idx + 1) * bin_step
+            boundaries = self.bin_boundaries[dim_idx]
+            bin_min = boundaries[bin_idx]
+            bin_max = boundaries[bin_idx + 1]
             
             ranges.append((bin_min, bin_max))
             
@@ -387,6 +436,7 @@ class QUICK_FIT():
         output_dir = self.output_dir
         fit_function = self.fit_function
 
+        print(f"Fit mode: {'Binned' if self.binned_fit else 'Unbinned'}")
         os.makedirs(output_dir, exist_ok=True)
 
         # Initialize results array: [bin_center_dim1, bin_center_dim2, ..., nsig, nsig_err, nsig_err]
@@ -545,6 +595,7 @@ class QUICK_FIT():
                     self._save_single_bin_result(results_file, flat_bin_idx, np.array(result_row))
                     
                     print(f"Signal yield: {nsig:.2f} ± {nsig_err:.2f}")
+                    print("Output saved to:", bin_output)
 
                     
                     fit_status = result.status()
@@ -572,7 +623,8 @@ class QUICK_FIT():
                 # Clean up temp file
                 filtered_tree.Delete()
                 temp_file.Close()
-                os.remove(temp_file_path)
+                # temporarily keep the file, for data mc comparsion usage
+                #os.remove(temp_file_path) 
                 
             except Exception as e:
                 print(f"Error setting up bin {flat_bin_idx}: {str(e)}")
@@ -724,260 +776,3 @@ class QUICK_FIT():
             h_nsig.GetXaxis().SetTitle("#phi")
         style_draw([h_nsig], args.output_dir + "nsig.png")
         '''
-
-
-    ### below part not finished yet
-    def perform_joint_fit(self, 
-                     workspace1: ROOT.RooWorkspace, 
-                     workspace2: ROOT.RooWorkspace,
-                     joint_params: List[str] = ["nsig"],
-                     output_file: str = "", 
-                     log_file: str = "") -> Tuple[ROOT.RooFitResult, float, float]:
-        """
-        Perform joint fitting using RooSimultaneous with shared parameters
-    
-        Args:
-            workspace1: First workspace containing model and dataset
-            workspace2: Second workspace containing model and dataset
-            joint_params: List of parameter names to share between models
-            output_file: Path to save fit results
-            log_file: Path to save log output
-    
-        Returns:
-            Tuple of (fit_result, nsig, nsig_error)
-        """
-    
-        # Create a new workspace for joint fitting
-        joint_workspace = ROOT.RooWorkspace("joint_ws", "Joint fitting workspace")
-    
-        print(f"=== Starting Joint Fit ===")
-        print(f"Shared parameters: {joint_params}")
-    
-        # Step 1: Import everything from both workspaces with renaming
-        print("Importing models and datasets...")
-    
-        # Import from workspace1 with suffix "_var1"
-        dataset1 = workspace1.data("dataset")
-        model1 = workspace1.pdf("model")
-        joint_workspace.import_(dataset1, ROOT.RooFit.RenameAllNodes("_var1"))
-        joint_workspace.import_(model1, ROOT.RooFit.RenameAllNodes("_var1"))
-    
-        # Import from workspace2 with suffix "_var2"  
-        dataset2 = workspace2.data("dataset")
-        model2 = workspace2.pdf("model")
-        joint_workspace.import_(dataset2, ROOT.RooFit.RenameAllNodes("_var2"))
-        joint_workspace.import_(model2, ROOT.RooFit.RenameAllNodes("_var2"))
-    
-        print(f"Dataset 1 entries: {dataset1.numEntries()}")
-        print(f"Dataset 2 entries: {dataset2.numEntries()}")
-    
-        # Step 2: Create shared parameters and rebuild models
-        self._create_shared_parameters(joint_workspace, workspace1, workspace2, joint_params)
-    
-        # Step 3: Create category variable for RooSimultaneous
-        joint_workspace.factory("category[var1,var2]")
-        category = joint_workspace.cat("category")
-    
-        # Step 4: Create RooSimultaneous model
-        sim_model = ROOT.RooSimultaneous("sim_model", "Simultaneous model", category)
-    
-        # Add the modified models to simultaneous PDF
-        model1_modified = joint_workspace.pdf("model_var1_shared")
-        model2_modified = joint_workspace.pdf("model_var2_shared")
-    
-        if not model1_modified:
-            model1_modified = joint_workspace.pdf("model_var1")
-        if not model2_modified:
-            model2_modified = joint_workspace.pdf("model_var2")
-    
-        sim_model.addPdf(model1_modified, "var1")
-        sim_model.addPdf(model2_modified, "var2")
-        joint_workspace.import_(sim_model)
-    
-        # Step 5: Create combined dataset with category information
-        combined_dataset = ROOT.RooDataSet("joint dataset", "joint dataset",
-                                           Index()) 
-        self._create_simultaneous_dataset(
-            joint_workspace, "dataset_var1", "dataset_var2", category
-        )
-        joint_workspace.import_(combined_dataset)
-    
-        # Step 6: Perform simultaneous fit
-        fit_utils = FIT_UTILS(log_file=log_file, var_config=[])
-    
-        with fit_utils.redirect_output():
-            print("Performing simultaneous fit...")
-        
-            sim_model = joint_workspace.pdf("sim_model")
-            combined_data = joint_workspace.data("combined_dataset")
-        
-            joint_result = sim_model.fitTo(combined_data,
-                                     ROOT.RooFit.Save(),
-                                     ROOT.RooFit.Extended(True),
-                                     ROOT.RooFit.PrintLevel(0),
-                                     ROOT.RooFit.NumCPU(4))
-        
-            # Extract shared signal yield
-            nsig_joint, nsig_err_joint = self._extract_shared_signal_yield(joint_workspace, joint_params)
-        
-            print(f"Joint fit signal yield: {nsig_joint:.2f} ± {nsig_err_joint:.2f}")
-    
-        # Save results if output file specified
-        if output_file:
-            joint_workspace.writeToFile(output_file + "_joint_workspace.root")
-        
-            result_file = ROOT.TFile(output_file + "_joint_fitresult.root", "RECREATE")
-            joint_result.Write()
-            result_file.Close()
-        
-            print(f"Joint fit results saved to {output_file}_joint_*.root")
-    
-        print(f"=== Joint Fit Complete ===")
-    
-        return joint_result, nsig_joint, nsig_err_joint
-
-    def _create_shared_parameters(self, joint_workspace: ROOT.RooWorkspace, 
-                            workspace1: ROOT.RooWorkspace, workspace2: ROOT.RooWorkspace,
-                            joint_params: List[str]):
-        """
-        Create shared parameters and rebuild models to use them
-        """
-        print(f"Creating shared parameters: {joint_params}")
-    
-        for param_name in joint_params:
-            param1 = workspace1.var(param_name)
-            param2 = workspace2.var(param_name)
-        
-            if param1 and param2:
-                # Create shared parameter with average initial value
-                param_val = (param1.getVal() + param2.getVal()) / 2
-                param_min = min(param1.getMin(), param2.getMin())
-                param_max = max(param1.getMax(), param2.getMax())
-            
-                shared_param_name = f"{param_name}_shared"
-                joint_workspace.factory(f"{shared_param_name}[{param_val}, {param_min}, {param_max}]")
-            
-                print(f"Created shared parameter: {shared_param_name} = {param_val}")
-            
-                # Rebuild models to use shared parameter
-                self._rebuild_model_with_shared_param(joint_workspace, "model_var1", param_name, shared_param_name)
-                self._rebuild_model_with_shared_param(joint_workspace, "model_var2", param_name, shared_param_name)
-
-    def _rebuild_model_with_shared_param(self, workspace: ROOT.RooWorkspace, 
-                                   model_name: str, old_param_name: str, new_param_name: str):
-        """
-        Rebuild model to use shared parameter
-        """
-        model = workspace.pdf(model_name)
-        if not model:
-            print(f"Warning: Model {model_name} not found")
-            return
-    
-        # Get the original model components
-        if hasattr(model, 'coefList') and hasattr(model, 'pdfList'):
-            # This is a RooAddPdf (SUM model)
-            pdf_list = model.pdfList()
-            coef_list = model.coefList()
-        
-            # Create new coefficient list with shared parameter
-            new_coef_list = ROOT.RooArgList()
-            coef_iter = coef_list.createIterator()
-            coef = coef_iter.Next()
-            while coef:
-                if coef.GetName() == f"{old_param_name}_var1" or coef.GetName() == f"{old_param_name}_var2":
-                    # Replace with shared parameter
-                    shared_param = workspace.var(new_param_name)
-                    if shared_param:
-                        new_coef_list.add(shared_param)
-                    else:
-                        new_coef_list.add(coef)
-                else:
-                    new_coef_list.add(coef)
-                coef = coef_iter.Next()
-        
-            # Create new model with shared parameters
-            new_model = ROOT.RooAddPdf(f"{model_name}_shared", f"{model_name} with shared params", 
-                                 pdf_list, new_coef_list)
-            workspace.import_(new_model)
-        
-            print(f"Rebuilt model {model_name} with shared parameter {new_param_name}")
-
-    def _create_simultaneous_dataset(self, workspace: ROOT.RooWorkspace, 
-                               dataset1_name: str, dataset2_name: str,
-                               category: ROOT.RooCategory) -> ROOT.RooDataSet:
-        """
-        Create combined dataset with category variable for RooSimultaneous
-        """
-        dataset1 = workspace.data(dataset1_name)
-        dataset2 = workspace.data(dataset2_name)
-    
-        if not dataset1 or not dataset2:
-            raise ValueError(f"Datasets {dataset1_name} or {dataset2_name} not found")
-    
-        # Get all variables from both datasets
-        vars1 = dataset1.get()
-        vars2 = dataset2.get()
-    
-        # Create combined variable set with category
-        combined_vars = ROOT.RooArgSet(category)
-    
-        # Add variables from first dataset
-        var_iter1 = vars1.createIterator()
-        var = var_iter1.Next()
-        while var:
-            combined_vars.add(var)
-            var = var_iter1.Next()
-    
-        # Add variables from second dataset (if not already present)
-        var_iter2 = vars2.createIterator()
-        var = var_iter2.Next()
-        while var:
-            if not combined_vars.find(var.GetName()):
-                combined_vars.add(var)
-            var = var_iter2.Next()
-    
-        combined_dataset = ROOT.RooDataSet("combined_dataset", "Combined dataset", combined_vars)
-    
-        print("Creating combined dataset with category information...")
-    
-        # Add entries from first dataset with category "var1"
-        category.setLabel("var1")
-        for i in range(dataset1.numEntries()):
-            dataset1.get(i)
-            combined_dataset.add(combined_vars)
-            if i % 10000 == 0:
-                print(f"Added entry {i}/{dataset1.numEntries()} from dataset1")
-    
-        # Add entries from second dataset with category "var2"
-        category.setLabel("var2")
-        for i in range(dataset2.numEntries()):
-            dataset2.get(i)
-            combined_dataset.add(combined_vars)
-            if i % 10000 == 0:
-                print(f"Added entry {i}/{dataset2.numEntries()} from dataset2")
-    
-        total_entries = dataset1.numEntries() + dataset2.numEntries()
-        print(f"Combined dataset created with {combined_dataset.numEntries()} entries (expected: {total_entries})")
-    
-        return combined_dataset
-
-    def _extract_shared_signal_yield(self, workspace: ROOT.RooWorkspace, 
-                               joint_params: List[str]) -> Tuple[float, float]:
-        """
-        Extract shared signal yield from workspace
-        """
-        # Look for shared signal parameter
-        for param_name in joint_params:
-            if "nsig" in param_name or "signal" in param_name:
-                shared_param = workspace.var(f"{param_name}_shared")
-                if shared_param:
-                    return shared_param.getVal(), shared_param.getError()
-    
-        # Fallback: look for any shared parameter
-        for param_name in joint_params:
-            shared_param = workspace.var(f"{param_name}_shared")
-            if shared_param:
-                return shared_param.getVal(), shared_param.getError()
-    
-        print("Warning: No shared signal yield parameter found")
-        return 0.0, 0.0
