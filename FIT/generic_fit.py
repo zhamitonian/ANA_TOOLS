@@ -19,6 +19,14 @@ from .pdf_builders import PDF_REGISTRY
 from .model_parser import ModelParser
 
 
+"""
+generic fit framework
+version : 2.1.0
+Date    : 2026-01-23
+Author  : wangzheng
+"""
+
+
 # ============================================================================
 # Configuration Classes
 # ============================================================================
@@ -97,6 +105,7 @@ class FitterConfig:
 class DatasetConfig:
     """Dataset creation and processing configuration."""
     binned_fit: bool = False
+    weight_branch: Optional[str] = None
     branches_name: Optional[List[str]] = None
     if_save: bool = False
     perform_splot: bool = False
@@ -220,7 +229,9 @@ class GenericFit:
             self.dataset_cfg.branches_name,
             self.dataset_cfg.binned_fit,
             nbin,
-            save_rootFile=self.dataset_cfg.if_save
+            weight_branch=self.dataset_cfg.weight_branch,
+            #save_rootFile=self.dataset_cfg.if_save
+            save_rootFile= False
         )
         
         self.workspace.Import(self.dataset, ROOT.RooFit.Rename("dataset"))
@@ -266,8 +277,10 @@ class GenericFit:
             rf.NumCPU(self.fitter_cfg.num_cpu),
             rf.PrintLevel(self.fitter_cfg.print_level),
             rf.Strategy(self.fitter_cfg.strategy),
-            rf.Minimizer(self.fitter_cfg.minimizer, self.fitter_cfg.algorithm)
+            rf.Minimizer(self.fitter_cfg.minimizer, self.fitter_cfg.algorithm),
+            rf.SumW2Error(True) # to correctly calculate errors with weights
         )
+        # rf.AsymptoticError(True)
         
         # Check fit quality
         self._check_fit_quality()
@@ -329,6 +342,19 @@ class GenericFit:
             self.model,
             yield_list
         )
+
+        sWeighted_data = ROOT.RooDataSet(
+            "sWeighted_data",
+            "Data with sWeights",
+            self.dataset,
+            self.dataset.get(),
+            "",
+            "nsig_sw"  # Assuming nsig is the signal yield variable
+        )
+
+        out_file = ROOT.TFile(self.output_dir + "_splot_output.root", "RECREATE")
+        sWeighted_data.Write("signal_weighted_data")
+        out_file.Close()
         
         return sData
     
@@ -608,3 +634,13 @@ class GenericFit:
         def _null():
             yield
         return _null()
+
+
+"""
+v2.0.0 
+initial version
+
+v2.1.0
+- add weight branch support and sumw2error in fit
+date : 2026-01-23
+"""
