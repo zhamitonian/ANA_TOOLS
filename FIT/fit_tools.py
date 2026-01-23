@@ -10,6 +10,14 @@ import ROOT
 from ROOT import RooFit as rf
 from ROOT import RooStats
 
+
+"""
+fit tools utility
+version : 2.1.0
+Date    : 2026-01-23
+Author  : wangzheng
+"""
+
 class FIT_UTILS():
     """
     Utility class for performing fits with ROOT and RooFit.
@@ -76,6 +84,7 @@ class FIT_UTILS():
                    branches_name: Optional[List[str]] = None, 
                    binned_fit: bool = False,
                    hist_bins: int = 100,
+                   weight_branch : Optional[str] = None,
                    save_rootFile:bool = False) -> Union[ROOT.RooDataSet, ROOT.RooDataHist]:
         """
         Create RooDataSet (unbinned) or RooDataHist (binned) from TTree
@@ -86,6 +95,7 @@ class FIT_UTILS():
             branches_name: List of branch names to combine
             binned_fit: If True, create RooDataHist; if False, create RooDataSet
             hist_bins: Number of bins for histogram (only for binned mode)
+            weight_branch: Optional branch name for event weights
             save_rootFile: bool, whether to save the combined dataset to a ROOT file (only for unbinned mode)
         
         Returns:
@@ -101,6 +111,10 @@ class FIT_UTILS():
         for config in var_configs:
             workspace.factory(f"{config[0]}[{config[1]},{config[2]}]") 
             arg_set.add(workspace.var(config[0]))
+        if weight_branch is not None:
+            workspace.factory(f"{weight_branch}[0, 1000000]")
+            weight_var = workspace.var(weight_branch)
+            arg_set.add(weight_var)
 
         fit_var = workspace.var(var_configs[0][0])
         var_min, var_max = var_configs[0][1], var_configs[0][2]
@@ -110,7 +124,10 @@ class FIT_UTILS():
             print(f"Creating RooDataSet (unbinned) from TTree...")
             
             if branches_name is None:
-                dataset = ROOT.RooDataSet("dataset", "dataset", input_tree, arg_set)
+                if weight_branch is not None:
+                    dataset = ROOT.RooDataSet("dataset", "dataset", input_tree, arg_set, "", weight_branch)
+                else:
+                    dataset = ROOT.RooDataSet("dataset", "dataset", input_tree, arg_set)
                 print(f"Created RooDataSet with {dataset.numEntries()} entries")
                 return dataset
 
@@ -144,7 +161,10 @@ class FIT_UTILS():
             arg_set.add(workspace.var("event_idx"))
             arg_set.add(workspace.var("cand_idx"))
             
-            dataset = ROOT.RooDataSet("dataset", "Combined dataset", arg_set)
+            if weight_branch is not None:
+                dataset = ROOT.RooDataSet("dataset", "Combined dataset", arg_set, ROOT.RooFit.WeightVar(weight_var))
+            else:
+                dataset = ROOT.RooDataSet("dataset", "Combined dataset", arg_set)
             other_vars = [workspace.var(config[0]) for config in var_configs[1:]]
             event_idx_var = workspace.var("event_idx")
             cand_idx_var = workspace.var("cand_idx")
@@ -153,7 +173,7 @@ class FIT_UTILS():
             total_entries = 0
 
             # Helper function to add entry to dataset
-            def add_entry(value, evt_idx, cnd_idx):
+            def add_entry(value, evt_idx, cnd_idx, weight=None):
                 nonlocal total_entries
                 if var_min <= value <= var_max:
                     fit_var.setVal(value)
@@ -161,28 +181,44 @@ class FIT_UTILS():
                         var.setVal(other_val)
                     event_idx_var.setVal(evt_idx)
                     cand_idx_var.setVal(cnd_idx)
-                    dataset.add(arg_set)
+                    if weight_branch is not None and weight is not None:
+                        weight_var.setVal(weight)
+                        dataset.add(arg_set, float(weight))
+                    else:
+                        dataset.add(arg_set)
                     total_entries += 1
             
             # Iterate through tree
             for i, event in enumerate(input_tree):
                 if i % 10000 == 0:
                     print(f"Processing event {i}...")
-                
+
                 # Get other variables' values
                 other_values = [getattr(event, var_config[0]) for var_config in var_configs[1:]]
-                
+
+                # Prepare weight(s) if needed
+                if weight_branch is not None:
+                    weight_val = getattr(event, weight_branch, None)
+                else:
+                    weight_val = None
+
                 # Check if branches are vectors
                 first_branch = getattr(event, branches_name[0])
                 is_vector = hasattr(first_branch, '__len__') and not isinstance(first_branch, str)
-                
+
                 if is_vector:
                     # Handle vector branches
                     for branch_name in branches_name:
                         try:
                             branch_vec = getattr(event, branch_name)
-                            for cand_idx, value in enumerate(branch_vec):
-                                add_entry(value, i, cand_idx)
+                            # If weight is also a vector, match by index; else use scalar for all
+                            if weight_branch is not None and weight_val is not None and hasattr(weight_val, '__len__') and not isinstance(weight_val, str):
+                                for cand_idx, value in enumerate(branch_vec):
+                                    w = weight_val[cand_idx] if cand_idx < len(weight_val) else 1.0
+                                    add_entry(value, i, cand_idx, w)
+                            else:
+                                for cand_idx, value in enumerate(branch_vec):
+                                    add_entry(value, i, cand_idx, weight_val)
                         except AttributeError:
                             print(f"Warning: Branch {branch_name} not found in event {i}")
                             continue
@@ -191,12 +227,15 @@ class FIT_UTILS():
                     for branch_name in branches_name:
                         try:
                             branch_value = getattr(event, branch_name)
-                            add_entry(branch_value, i, 0)  # Scalar branch uses cand_idx=0
+                            add_entry(branch_value, i, 0, weight_val)  # Scalar branch uses cand_idx=0
                         except AttributeError:
                             print(f"Warning: Branch {branch_name} not found in event {i}")
                             continue
 
             print(f"Combined dataset created with {total_entries} entries")
+            vars = dataset.get()
+            for var in vars:
+                print(var.GetName())
             return dataset
 
         # === BINNED MODE: Create RooDataHist ===
@@ -214,11 +253,18 @@ class FIT_UTILS():
             fit_var_name = var_configs[0][0]
 
             if branches_name is None or len(branches_name) == 0:
-                histogram = df.Histo1D(hist_model, fit_var_name).GetValue()
+                if weight_branch is None:
+                    histogram = df.Histo1D(hist_model, fit_var_name).GetValue()
+                else:
+                    histogram = df.Histo1D(hist_model, fit_var_name, weight_branch).GetValue()
+                print(f"hist: { histogram.GetEntries()}")
             else:
                 hists = []
                 for branch in branches_name:
-                    hists.append(df.Histo1D(hist_model, branch).GetValue())
+                    if weight_branch is None:
+                        hists.append(df.Histo1D(hist_model, branch).GetValue())
+                    else:
+                        hists.append(df.Histo1D(hist_model, branch, weight_branch).GetValue())
                 # Sum histograms
                 histogram = hists[0]
                 for h in hists[1:]:
@@ -245,7 +291,6 @@ class FIT_UTILS():
             
             # Create RooDataHist from histogram
             datahist = ROOT.RooDataHist("datahist", "Binned dataset", arg_set, histogram)
-            
             print(f"Created RooDataHist with {datahist.sumEntries()} entries")
             print(f"Number of bins: {datahist.numEntries()}")
             
@@ -421,6 +466,7 @@ class QUICK_FIT():
 
     def batch_fit(self, bins_to_fit: Optional[List[int]] = None,
                   branches_name: Optional[List[str]] = None,
+                  weight_branch: Optional[str] = None,
                   additional_cut: str = ""):
         """
         Perform batch fitting - always passes TTree to fit function
@@ -501,58 +547,70 @@ class QUICK_FIT():
                 bin_output = f"{output_dir}bin_{flat_bin_idx:0{pad_width}d}"
                 bin_log_file = f"{output_dir}bin_{flat_bin_idx:0{pad_width}d}.log"
                 print(f"Log file: {bin_log_file}")
-                
-                #--------------------------------------------------------------
-                # Create filtered tree
-                rf = ROOT.RDataFrame("event", tree_path)
-                
-                # apply extra cut, if any
-                if additional_cut:
-                    rf = rf.Filter(additional_cut, "Additional cut")
+                    
+                temp_file_path = f"{output_dir}temp_bin_{flat_bin_idx}.root"
+                #os.remove(temp_file_path)
+                if not os.path.exists(temp_file_path):
+                    #--------------------------------------------------------------
+                    # Create filtered tree
+                    rf = ROOT.RDataFrame("event", tree_path)
+                    
+                    # apply extra cut, if any
+                    if additional_cut:
+                        rf = rf.Filter(additional_cut, "Additional cut")
 
-                # Apply cuts for all dimensions
-                bin_conditions = []
-                
-                for dim_idx, (bin_min, bin_max) in enumerate(ranges):
-                    var_name = self.bin_var_configs[dim_idx][0]
-                    is_vector = bin_var_types[dim_idx]
+                    # Apply cuts for all dimensions
+                    bin_conditions = []
                     
-                    condition = f"({var_name} >= {bin_min:.3f}) && ({var_name} <= {bin_max:.3f})"
-                    bin_conditions.append(condition)
-                    
-                    if is_vector:
-                        # For vector type: keep events with at least one element in range
-                        rf = rf.Filter(f"Any({condition})", f"Dim {dim_idx} has elements in range")
-                    else:
-                        # For scalar type: filter events directly
-                        rf = rf.Filter(condition, f"Dim {dim_idx} in range")
+                    for dim_idx, (bin_min, bin_max) in enumerate(ranges):
+                        var_name = self.bin_var_configs[dim_idx][0]
+                        is_vector = bin_var_types[dim_idx]
+                        
+                        condition = f"({var_name} >= {bin_min:.3f}) && ({var_name} <= {bin_max:.3f})"
+                        bin_conditions.append(condition)
+                        
+                        if is_vector:
+                            # For vector type: keep events with at least one element in range
+                            rf = rf.Filter(f"Any({condition})", f"Dim {dim_idx} has elements in range")
+                            #rf = rf.Redefine(var_name, f"{var_name}[{condition}]") 
+                            # could not do this here, would cause vector different size
+                        else:
+                            # For scalar type: filter events directly
+                            rf = rf.Filter(condition, f"Dim {dim_idx} in range")
 
-                # Apply element filtering for vector branches
-                has_vector = any(bin_var_types)
-                
-                if has_vector:
-                    # Create combined condition for vector indexing
-                    # Use AND logic: element must be in range for ALL vector dimensions
-                    vector_conditions = [cond for dim_idx, cond in enumerate(bin_conditions) 
-                                        if bin_var_types[dim_idx]]
-                    combined_condition = " && ".join(vector_conditions)
+                    # Apply element filtering for vector branches
+                    has_vector = any(bin_var_types)
                     
-                    # apply selection to provided branches as well
-                    if branches_name:
-                        for branch_name in branches_name:
+                    if has_vector:
+                        if not branches_name:
+                            raise ValueError(
+                                f"Vector branches_name is required when binning variables contain vectors. "
+                                f"Vector binning variables detected: {[self.bin_var_configs[i][0] for i, is_vec in enumerate(bin_var_types) if is_vec]}"
+                            )
+                        
+                        # Create combined condition for vector indexing
+                        # Use AND logic: element must be in range for ALL vector dimensions
+                        vector_conditions = [cond for dim_idx, cond in enumerate(bin_conditions) 
+                                            if bin_var_types[dim_idx]]
+                        combined_condition = " && ".join(vector_conditions)
+                        
+                        # Apply selection to provided branches
+                        for branch_name in branches_name + [weight_branch if weight_branch else []]:
                             try:
                                 branch_type = rf.GetColumnType(branch_name)
                                 if "vector" in branch_type.lower() or "rvec" in branch_type.lower():
                                     rf = rf.Redefine(branch_name, f"{branch_name}[{combined_condition}]")
                             except Exception as e:
                                 print(f"Warning: Could not filter branch {branch_name}: {e}")
-                            
-                # Save filtered tree to temporary file
+                                
+                    # Save filtered tree to temporary file
+                    print(f"Creating temporary tree for fitting...")
 
-                print(f"Creating temporary tree for fitting...")
-                    
-                temp_file_path = f"{output_dir}temp_bin_{flat_bin_idx}.root"
-                rf.Snapshot("event", temp_file_path)
+                    #temp_file_path = f"{output_dir}temp_bin_{flat_bin_idx}.root"
+                    rf.Snapshot("event", temp_file_path)
+                
+                else:
+                    print(f"Using existing file for fitting: {temp_file_path}")
                 
                 # Open the filtered tree
                 temp_file = ROOT.TFile.Open(temp_file_path)
@@ -572,7 +630,6 @@ class QUICK_FIT():
                     failed_bins.append(flat_bin_idx)
                     continue
                 #--------------------------------------------------------------
-
                 # Perform fit - pass tree and binned_fit flag
                 try:
                     result, nsig, nsig_err = fit_function(
@@ -738,6 +795,8 @@ class QUICK_FIT():
         parser.add_argument('--bins', type=str, help='Bins to fit')
         parser.add_argument('--branches_name', '-BrN', type=str,
                         help='Comma-separated branch names')
+        parser.add_argument('--weight_branch', '-WgN', type=str,
+                        help='Branch name for event weights')
         parser.add_argument('--binned', action='store_true', 
                           help='Perform binned fit (default: False)')
         
@@ -746,6 +805,8 @@ class QUICK_FIT():
         self.tree_path = args.input
         self.output_dir = args.output_dir
         self.binned_fit = args.binned
+        
+        weight_branch = args.weight_branch if args.weight_branch else None
 
         branches_name = None
         if args.branches_name:
@@ -759,7 +820,7 @@ class QUICK_FIT():
                     bins_to_fit = list(range(start, end + 1))
                 else:
                     bins_to_fit = [int(x) for x in args.bins.split(",")]
-            self.batch_fit(bins_to_fit, branches_name)
+            self.batch_fit(bins_to_fit, branches_name, weight_branch)
         elif args.input:
             file = ROOT.TFile(args.input, "READ")
             tree = file.Get("event")
@@ -776,3 +837,11 @@ class QUICK_FIT():
             h_nsig.GetXaxis().SetTitle("#phi")
         style_draw([h_nsig], args.output_dir + "nsig.png")
         '''
+
+
+"""
+v2.1.0 
+- add weight branch support
+date : 2025-01-23
+
+"""
