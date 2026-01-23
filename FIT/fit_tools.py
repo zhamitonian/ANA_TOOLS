@@ -13,7 +13,7 @@ from ROOT import RooStats
 
 """
 fit tools utility
-version : 2.0.0
+version : 2.1.0
 Date    : 2026-01-23
 Author  : wangzheng
 """
@@ -113,7 +113,8 @@ class FIT_UTILS():
             arg_set.add(workspace.var(config[0]))
         if weight_branch is not None:
             workspace.factory(f"{weight_branch}[0, 1000000]")
-            arg_set.add(workspace.var(weight_branch))
+            weight_var = workspace.var(weight_branch)
+            arg_set.add(weight_var)
 
         fit_var = workspace.var(var_configs[0][0])
         var_min, var_max = var_configs[0][1], var_configs[0][2]
@@ -161,7 +162,7 @@ class FIT_UTILS():
             arg_set.add(workspace.var("cand_idx"))
             
             if weight_branch is not None:
-                dataset = ROOT.RooDataSet("dataset", "Combined dataset", arg_set, ROOT.RooFit.WeightVar(weight_branch))
+                dataset = ROOT.RooDataSet("dataset", "Combined dataset", arg_set, ROOT.RooFit.WeightVar(weight_var))
             else:
                 dataset = ROOT.RooDataSet("dataset", "Combined dataset", arg_set)
             other_vars = [workspace.var(config[0]) for config in var_configs[1:]]
@@ -181,8 +182,10 @@ class FIT_UTILS():
                     event_idx_var.setVal(evt_idx)
                     cand_idx_var.setVal(cnd_idx)
                     if weight_branch is not None and weight is not None:
-                        workspace.var(weight_branch).setVal(weight)
-                    dataset.add(arg_set)
+                        weight_var.setVal(weight)
+                        dataset.add(arg_set, float(weight))
+                    else:
+                        dataset.add(arg_set)
                     total_entries += 1
             
             # Iterate through tree
@@ -212,9 +215,7 @@ class FIT_UTILS():
                             if weight_branch is not None and weight_val is not None and hasattr(weight_val, '__len__') and not isinstance(weight_val, str):
                                 for cand_idx, value in enumerate(branch_vec):
                                     w = weight_val[cand_idx] if cand_idx < len(weight_val) else 1.0
-                                    w = 100
                                     add_entry(value, i, cand_idx, w)
-                                    #print(f"test: add weight {w}")
                             else:
                                 for cand_idx, value in enumerate(branch_vec):
                                     add_entry(value, i, cand_idx, weight_val)
@@ -232,6 +233,9 @@ class FIT_UTILS():
                             continue
 
             print(f"Combined dataset created with {total_entries} entries")
+            vars = dataset.get()
+            for var in vars:
+                print(var.GetName())
             return dataset
 
         # === BINNED MODE: Create RooDataHist ===
@@ -462,6 +466,7 @@ class QUICK_FIT():
 
     def batch_fit(self, bins_to_fit: Optional[List[int]] = None,
                   branches_name: Optional[List[str]] = None,
+                  weight_branch: Optional[str] = None,
                   additional_cut: str = ""):
         """
         Perform batch fitting - always passes TTree to fit function
@@ -590,7 +595,7 @@ class QUICK_FIT():
                         combined_condition = " && ".join(vector_conditions)
                         
                         # Apply selection to provided branches
-                        for branch_name in branches_name:
+                        for branch_name in branches_name + [weight_branch if weight_branch else []]:
                             try:
                                 branch_type = rf.GetColumnType(branch_name)
                                 if "vector" in branch_type.lower() or "rvec" in branch_type.lower():
@@ -790,6 +795,8 @@ class QUICK_FIT():
         parser.add_argument('--bins', type=str, help='Bins to fit')
         parser.add_argument('--branches_name', '-BrN', type=str,
                         help='Comma-separated branch names')
+        parser.add_argument('--weight_branch', '-WgN', type=str,
+                        help='Branch name for event weights')
         parser.add_argument('--binned', action='store_true', 
                           help='Perform binned fit (default: False)')
         
@@ -798,6 +805,8 @@ class QUICK_FIT():
         self.tree_path = args.input
         self.output_dir = args.output_dir
         self.binned_fit = args.binned
+        
+        weight_branch = args.weight_branch if args.weight_branch else None
 
         branches_name = None
         if args.branches_name:
@@ -811,7 +820,7 @@ class QUICK_FIT():
                     bins_to_fit = list(range(start, end + 1))
                 else:
                     bins_to_fit = [int(x) for x in args.bins.split(",")]
-            self.batch_fit(bins_to_fit, branches_name)
+            self.batch_fit(bins_to_fit, branches_name, weight_branch)
         elif args.input:
             file = ROOT.TFile(args.input, "READ")
             tree = file.Get("event")
@@ -828,3 +837,11 @@ class QUICK_FIT():
             h_nsig.GetXaxis().SetTitle("#phi")
         style_draw([h_nsig], args.output_dir + "nsig.png")
         '''
+
+
+"""
+v2.1.0 
+- add weight branch support
+date : 2025-01-23
+
+"""
