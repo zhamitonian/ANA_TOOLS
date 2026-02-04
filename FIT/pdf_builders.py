@@ -3,6 +3,10 @@ PDF builder classes for constructing different types of signal and background PD
 
 This module provides a flexible way to construct various PDFs for fitting.
 Each builder encapsulates the logic for creating a specific type of PDF.
+
+version: 2.1
+date   : 2026-02-04
+author : wang zheng
 """
 
 import ROOT
@@ -250,25 +254,25 @@ class DoubleGaussianBreitWignerBuilder(PDFBuilder):
     
     def build(self, workspace: ROOT.RooWorkspace, var_name: str,
               config: Dict[str, Any], pdf_name: str) -> str:
-        params = self.get_params(config, var_name)
+        params = self.get_params(config, pdf_name)
         
         # Breit-Wigner
-        workspace.factory(f"BreitWigner::bw_{var_name}({var_name}, {params['mass']}, {params['width']})")
+        workspace.factory(f"BreitWigner::bw_{pdf_name}({var_name}, {params['mass']}, {params['width']})")
         
         # Core Gaussian
-        workspace.factory(f"Gaussian::gauss1_{var_name}({var_name}, 0, {params['sigma1']})")
+        workspace.factory(f"Gaussian::gauss1_{pdf_name}({var_name}, 0, {params['sigma1']})")
         
         # Tail Gaussian
-        workspace.factory(f"Gaussian::gauss2_{var_name}({var_name}, 0, {params['sigma2']})")
+        workspace.factory(f"Gaussian::gauss2_{pdf_name}({var_name}, 0, {params['sigma2']})")
         
         # Sum of Gaussians
         workspace.factory(
-            f"SUM::double_gauss_{var_name}({params['frac']} * gauss1_{var_name}, gauss2_{var_name})"
+            f"SUM::double_gauss_{pdf_name}({params['frac']} * gauss1_{pdf_name}, gauss2_{pdf_name})"
         )
         
         # Convolution
         workspace.factory(
-            f"FCONV::{pdf_name}({var_name}, bw_{var_name}, double_gauss_{var_name})"
+            f"FCONV::{pdf_name}({var_name}, bw_{pdf_name}, double_gauss_{pdf_name})"
         )
         
         return pdf_name
@@ -296,7 +300,7 @@ class CrystalBallBuilder(PDFBuilder):
     
     def build(self, workspace: ROOT.RooWorkspace, var_name: str,
               config: Dict[str, Any], pdf_name: str) -> str:
-        params = self.get_params(config, var_name)
+        params = self.get_params(config, pdf_name)
         
         workspace.factory(
             f"CBShape::{pdf_name}({var_name}, {params['mean']}, {params['sigma']}, {params['alpha']}, {params['n']})"
@@ -325,7 +329,7 @@ class VoigtianBuilder(PDFBuilder):
     
     def build(self, workspace: ROOT.RooWorkspace, var_name: str,
               config: Dict[str, Any], pdf_name: str) -> str:
-        params = self.get_params(config, var_name)
+        params = self.get_params(config, pdf_name)
         
         workspace.factory(
             f"Voigtian::{pdf_name}({var_name}, {params['mean']}, {params['width']}, {params['sigma']})"
@@ -350,7 +354,7 @@ class GaussianBuilder(PDFBuilder):
     
     def build(self, workspace: ROOT.RooWorkspace, var_name: str,
               config: Dict[str, Any], pdf_name: str) -> str:
-        params = self.get_params(config, var_name)
+        params = self.get_params(config, pdf_name)
         
         workspace.factory(f"Gaussian::{pdf_name}({var_name}, {params['mean']}, {params['sigma']})")
         
@@ -449,7 +453,7 @@ class ArgusBGBuilder(PDFBuilder):
     
     def build(self, workspace: ROOT.RooWorkspace, var_name: str,
               config: Dict[str, Any], pdf_name: str) -> str:
-        params = self.get_params(config, var_name)
+        params = self.get_params(config, pdf_name)
         
         workspace.factory(
             f"ArgusBG::{pdf_name}({var_name}, {params['m0']}, {params['c']}, {params['p']})"
@@ -472,7 +476,7 @@ class ExponentialBuilder(PDFBuilder):
     
     def build(self, workspace: ROOT.RooWorkspace, var_name: str,
               config: Dict[str, Any], pdf_name: str) -> str:
-        params = self.get_params(config, var_name)
+        params = self.get_params(config, pdf_name)
         
         workspace.factory(f"Exponential::{pdf_name}({var_name}, {params['tau']})")
         
@@ -491,6 +495,100 @@ class FlatBuilder(PDFBuilder):
         workspace.factory(f"Uniform::{pdf_name}({var_name})")
         
         return pdf_name
+
+
+# template fit 
+class TemplateFitBuilder(PDFBuilder):
+    """
+    Build template PDF from MC data using either RooKeysPdf (unbinned) or RooHistPdf (binned).
+    
+    For unbinned fits: Uses RooKeysPdf to create a smooth kernel density estimation from MC data.
+    For binned fits: Creates a histogram template from MC data and builds RooHistPdf.
+    
+    Config parameters:
+        - template_file: Path to ROOT file containing MC template data (Required)
+        - tree_name: Name of TTree in template file (default: "event")
+        - var_name: Name of the variable in the tree (default: from var_name parameter)
+        - weight_branch: Branch name for event weights (optional)
+        - binned: Use binned template (RooHistPdf) instead of unbinned (RooKeysPdf) (default: False)
+        - nbins: Number of bins for histogram template (default: 100)
+        - range: Tuple (min, max) for variable range (default: from workspace variable)
+    """
+    # suppose the var name in mc is same as in workspace(real data) 
+    PARAMETERS = {
+        "template_file": None,  # Required
+        "tree_name": "event",
+        "weight_branch": None,
+        "binned": False,
+        "nbins": 100,
+        "range" : None,
+    }
+
+    def build(self, workspace: ROOT.RooWorkspace, var_name: str,
+              config: Dict[str, Any], pdf_name: str) -> str:
+        params = self.get_params(config, pdf_name)
+        
+        # Open template file and get MC tree
+        template_file = ROOT.TFile.Open(params["template_file"])
+        if not template_file or template_file.IsZombie():
+            raise RuntimeError(f"Cannot open template file: {params['template_file']}")
+        
+        tree = template_file.Get(params["tree_name"])
+        if not tree:
+            raise RuntimeError(f"Cannot find tree '{params['tree_name']}' in {params['template_file']}")
+        
+        # Get or create the observable variable in workspace
+        var = workspace.var(var_name)
+        if var is None:
+            # If variable doesn't exist, try to get range from config
+            var_range = config.get("range") 
+            if var_range and len(var_range) == 2:
+                workspace.factory(f"{var_name}[{var_range[0]}, {var_range[1]}]")
+                var = workspace.var(var_name)
+            else:
+                raise RuntimeError(f"Variable '{var_name}' not found in workspace and no range provided in config")
+        
+        # Create a temporary workspace for template dataset creation to avoid conflicts
+        temp_ws = ROOT.RooWorkspace("temp_ws_template", "Temporary workspace for template")
+        
+        # Create FIT_UTILS instance and use handle_dataset to create MC dataset
+        from .fit_tools import FIT_UTILS
+        var_config = [(var_name, var.getMin(), var.getMax())]
+        tools = FIT_UTILS(log_file=None, var_config=var_config)
+        
+        # Determine if we need binned dataset
+        binned = config.get("binned", self.PARAMETERS["binned"])
+        
+        # Use handle_dataset to create MC dataset in temporary workspace
+        mc_dataset = tools.handle_dataset(
+            input_tree=tree,
+            workspace=temp_ws,  # Use temporary workspace to avoid conflicts
+            branches_name=[var_name],  # Assume MC tree has same variable name
+            binned_fit=binned,
+            hist_bins=config.get("nbins", self.PARAMETERS["nbins"]),
+            weight_branch=params["weight_branch"],
+            save_rootFile=False
+        )
+        
+        # Import dataset to workspace
+        workspace.Import(mc_dataset, ROOT.RooFit.Rename(f"mc_dataset_{pdf_name}"))
+        
+        # Create template PDF based on binned or unbinned mode
+        if binned:
+            # For binned mode, mc_dataset is already a RooDataHist
+            # Create RooHistPdf directly
+            workspace.factory(f"RooHistPdf::{pdf_name}({var_name}, mc_dataset_{pdf_name})")
+        else:
+            # For unbinned mode, use RooKeysPdf (kernel density estimation)
+            # RooKeysPdf::pdf_name(var, dataset, mirrorOption, rho)
+            # mirrorOption: RooKeysPdf::NoMirror, Mirror, MirrorBoth, MirrorAsymBoth
+            # rho: kernel bandwidth as fraction of data range (typical: 1.0-2.0)
+            workspace.factory(
+                f"RooKeysPdf::{pdf_name}({var_name}, mc_dataset_{pdf_name}, RooKeysPdf::MirrorBoth, 2.0)"
+            )
+        return pdf_name
+
+        
 
 
 # ============================================================================
@@ -521,6 +619,7 @@ class PDFBuilderRegistry:
         self.register("argus", ArgusBGBuilder())
         self.register("exponential", ExponentialBuilder())
         self.register("flat", FlatBuilder())
+        self.register("template", TemplateFitBuilder())
     
     def register(self, name: str, builder: PDFBuilder):
         """Register a PDF builder."""
@@ -542,3 +641,13 @@ class PDFBuilderRegistry:
 
 # Global registry instance
 PDF_REGISTRY = PDFBuilderRegistry()
+
+"""
+version history:
+
+version: 2.1
+- Added TemplateFitBuilder for template-based PDFs using RooKeysPdf or RooHistPdf.
+- Improved parameter parsing and formatting in PDFBuilder base class.
+date   : 2026-02-04
+author : wang zheng
+"""
