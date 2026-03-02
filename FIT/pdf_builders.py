@@ -281,75 +281,79 @@ class DoubleGaussianBreitWignerBuilder(PDFBuilder):
 
 class CrystalBallBuilder(PDFBuilder):
     """
-    Build Crystal Ball PDF.
+    Build Crystal Ball PDF with flexible tail configuration.
     
-    Gaussian core with power-law tail, useful for asymmetric line shapes.
+    Automatically selects the appropriate RooCrystalBall constructor based on provided parameters:
+    
+    1. Single-sided CB (if alpha_right and n_right NOT provided):
+       Constructor: RooCrystalBall(x, mean, sigma, alpha, n, false)
+       Uses only left/single tail parameters
+    
+    2. Double-sided CB with symmetric Gaussian (if alpha_right and n_right provided, but NOT sigma_right):
+       Constructor: RooCrystalBall(x, mean, sigma, alphaL, nL, alphaR, nR)
+       Same sigma for both sides, different tail parameters
+    
+    3. Double-sided CB with asymmetric Gaussian (if alpha_right, n_right AND sigma_right all provided):
+       Constructor: RooCrystalBall(x, mean, sigmaL, sigmaR, alphaL, nL, alphaR, nR)
+       Different sigma and tail parameters for each side
     
     Config parameters (RooFit factory style):
-        - mean: value or (min, max) or (init, min, max)
-        - sigma: value or (min, max) or (init, min, max)
-        - alpha: value or (min, max) or (init, min, max) - tail parameter
-        - n: value or (min, max) or (init, min, max) - tail power
+        - mean: value or (min, max) or (init, min, max) - peak position (required)
+        - sigma: value or (min, max) or (init, min, max) - Gaussian core width (or left side if sigma_right given)
+        - alpha: value or (min, max) or (init, min, max) - tail parameter (left/single side)
+        - n: value or (min, max) or (init, min, max) - tail power (left/single side)
+        - alpha_right: value or (min, max) or (init, min, max) - right tail parameter (optional)
+        - n_right: value or (min, max) or (init, min, max) - right tail power (optional)
+        - sigma_right: value or (min, max) or (init, min, max) - right Gaussian width (optional)
     """
     
     PARAMETERS = {
         "mean": None,  # Required
-        "sigma": (0.001, 0.0001, 0.01),
-        "alpha": (1.5, 0, 5),
-        "n": (2.0, 0, 10),
+        "sigma": (0.001, 0.0001, 0.01), 
+        "alpha": (1.5, 0.001, 5),
+        "n": (2.0, 0.001, 10),
+        "alpha_right": None,
+        "n_right": None,
+        "sigma_right": None,
     }
     
     def build(self, workspace: ROOT.RooWorkspace, var_name: str,
               config: Dict[str, Any], pdf_name: str) -> str:
         params = self.get_params(config, pdf_name)
         
-        workspace.factory(
-            f"CBShape::{pdf_name}({var_name}, {params['mean']}, {params['sigma']}, {params['alpha']}, {params['n']})"
-        )
+        # Check which parameters are provided
+        has_alpha_right = "alpha_right" in config and config["alpha_right"] is not None
+        has_n_right = "n_right" in config and config["n_right"] is not None
+        has_sigma_right = "sigma_right" in config and config["sigma_right"] is not None
         
-        return pdf_name
-
-
-class BoubleSideralCrystalBallBuilder(PDFBuilder):
-    """
-    Build double-sided Crystal Ball PDF.
-    
-    Crystal Ball function with power-law tails on both sides (left and right).
-    Useful for asymmetric line shapes with tails on both sides.
-    Based on RooCrystalBall with parameters for both left and right tails.
-    
-    Config parameters (RooFit factory style):
-        - mean: value or (min, max) or (init, min, max)
-        - sigma_left: value or (min, max) or (init, min, max) - left side width
-        - sigma_right: value or (min, max) or (init, min, max) - right side width
-        - alpha_left: value or (min, max) or (init, min, max) - left tail parameter
-        - n_left: value or (min, max) or (init, min, max) - left tail power
-        - alpha_right: value or (min, max) or (init, min, max) - right tail parameter
-        - n_right: value or (min, max) or (init, min, max) - right tail power
-    """
-    
-    PARAMETERS = {
-        "mean": None,  # Required
-        "sigma_left": (0.001, 0.0001, 0.01),
-        "sigma_right": (0.001, 0.0001, 0.01),
-        "alpha_left": (1.5, 0, 5),
-        "n_left": (2.0, 0, 10),
-        "alpha_right": (1.5, 0, 5),
-        "n_right": (2.0, 0, 10),
-    }
-    
-    def build(self, workspace: ROOT.RooWorkspace, var_name: str,
-              config: Dict[str, Any], pdf_name: str) -> str:
-        params = self.get_params(config, pdf_name)
-        
-        # RooCrystalBall with both left and right tails
-        # Syntax: RooCrystalBall::name(x, mean, sigmaL, sigmaR, alphaL, nL, alphaR, nR)
-        workspace.factory(
-            f"CrystalBall::{pdf_name}({var_name}, {params['mean']}, "
-            f"{params['sigma_left']}, {params['sigma_right']}, "
-            f"{params['alpha_left']}, {params['n_left']}, "
-            f"{params['alpha_right']}, {params['n_right']})"
-        )
+        if not has_alpha_right and not has_n_right:
+            workspace.factory(
+                f"CBShape::{pdf_name}({var_name}, {params['mean']}, "
+                f"{params['sigma']}, {params['alpha']}, {params['n']})"
+            )
+        elif has_alpha_right and has_n_right and not has_sigma_right:
+            workspace.factory(
+                #f"DSCBShape::{pdf_name}({var_name}, {params['mean']}, "
+                #f"{params['sigma']}, {params['alpha']}, {params['n']}, "
+                #f"{params['alpha_right']}, {params['n_right']})"
+                f"CrystalBall::{pdf_name}({var_name}, {params['mean']}, "
+                f"{params['sigma']}, {params['sigma']}, "
+                f"{params['alpha']}, {params['n']}, "
+                f"{params['alpha_right']}, {params['n_right']})"
+            )
+        elif has_alpha_right and has_n_right and has_sigma_right:
+            workspace.factory(
+                f"CrystalBall::{pdf_name}({var_name}, {params['mean']}, "
+                f"{params['sigma']}, {params['sigma_right']}, "
+                f"{params['alpha']}, {params['n']}, "
+                f"{params['alpha_right']}, {params['n_right']})"
+            )
+        else:
+            raise ValueError(
+                f"Invalid parameter combination for {pdf_name}. "
+                f"Either provide: (1) only alpha & n, or (2) alpha, n, alpha_right & n_right, "
+                f"or (3) alpha, n, alpha_right, n_right & sigma_right"
+            )
         
         return pdf_name
 
@@ -657,7 +661,6 @@ class PDFBuilderRegistry:
         self.register("double_gauss", DoubleGaussianBuilder())
         self.register("double_gauss_bw", DoubleGaussianBreitWignerBuilder())
         self.register("crystal_ball", CrystalBallBuilder())
-        self.register("double_sided_crystal_ball", BoubleSideralCrystalBallBuilder())
         self.register("voigtian", VoigtianBuilder())
         self.register("gaussian", GaussianBuilder())
         self.register("polynomial", PolynomialBuilder())
