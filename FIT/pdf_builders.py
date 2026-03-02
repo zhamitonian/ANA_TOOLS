@@ -154,6 +154,7 @@ class BreitWignerGaussBuilder(PDFBuilder):
         "mass": None,  # Required
         "width": None,  # Required
         "resolution": (0.00083, 0.0002, 0.0014),
+        "reso_mean" : 0,
     }
     
     def build(self, workspace: ROOT.RooWorkspace, var_name: str,
@@ -164,7 +165,7 @@ class BreitWignerGaussBuilder(PDFBuilder):
         workspace.factory(f"BreitWigner::bw_{var_name}({var_name}, {params['mass']}, {params['width']})")
         
         # Gaussian smearing
-        workspace.factory(f"Gaussian::gauss_{var_name}({var_name}, 0, {params['resolution']})")
+        workspace.factory(f"Gaussian::gauss_{var_name}({var_name}, {params['reso_mean']}, {params['resolution']})")
         
         # Convolution
         workspace.factory(f"FCONV::{pdf_name}({var_name}, bw_{var_name}, gauss_{var_name})")
@@ -304,6 +305,50 @@ class CrystalBallBuilder(PDFBuilder):
         
         workspace.factory(
             f"CBShape::{pdf_name}({var_name}, {params['mean']}, {params['sigma']}, {params['alpha']}, {params['n']})"
+        )
+        
+        return pdf_name
+
+
+class BoubleSideralCrystalBallBuilder(PDFBuilder):
+    """
+    Build double-sided Crystal Ball PDF.
+    
+    Crystal Ball function with power-law tails on both sides (left and right).
+    Useful for asymmetric line shapes with tails on both sides.
+    Based on RooCrystalBall with parameters for both left and right tails.
+    
+    Config parameters (RooFit factory style):
+        - mean: value or (min, max) or (init, min, max)
+        - sigma_left: value or (min, max) or (init, min, max) - left side width
+        - sigma_right: value or (min, max) or (init, min, max) - right side width
+        - alpha_left: value or (min, max) or (init, min, max) - left tail parameter
+        - n_left: value or (min, max) or (init, min, max) - left tail power
+        - alpha_right: value or (min, max) or (init, min, max) - right tail parameter
+        - n_right: value or (min, max) or (init, min, max) - right tail power
+    """
+    
+    PARAMETERS = {
+        "mean": None,  # Required
+        "sigma_left": (0.001, 0.0001, 0.01),
+        "sigma_right": (0.001, 0.0001, 0.01),
+        "alpha_left": (1.5, 0, 5),
+        "n_left": (2.0, 0, 10),
+        "alpha_right": (1.5, 0, 5),
+        "n_right": (2.0, 0, 10),
+    }
+    
+    def build(self, workspace: ROOT.RooWorkspace, var_name: str,
+              config: Dict[str, Any], pdf_name: str) -> str:
+        params = self.get_params(config, pdf_name)
+        
+        # RooCrystalBall with both left and right tails
+        # Syntax: RooCrystalBall::name(x, mean, sigmaL, sigmaR, alphaL, nL, alphaR, nR)
+        workspace.factory(
+            f"CrystalBall::{pdf_name}({var_name}, {params['mean']}, "
+            f"{params['sigma_left']}, {params['sigma_right']}, "
+            f"{params['alpha_left']}, {params['n_left']}, "
+            f"{params['alpha_right']}, {params['n_right']})"
         )
         
         return pdf_name
@@ -612,6 +657,7 @@ class PDFBuilderRegistry:
         self.register("double_gauss", DoubleGaussianBuilder())
         self.register("double_gauss_bw", DoubleGaussianBreitWignerBuilder())
         self.register("crystal_ball", CrystalBallBuilder())
+        self.register("double_sided_crystal_ball", BoubleSideralCrystalBallBuilder())
         self.register("voigtian", VoigtianBuilder())
         self.register("gaussian", GaussianBuilder())
         self.register("polynomial", PolynomialBuilder())
