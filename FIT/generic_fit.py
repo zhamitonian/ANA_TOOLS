@@ -99,6 +99,8 @@ class FitterConfig:
     strategy: int = 2
     minimizer: str = "Minuit2"
     algorithm: str = "migrad"
+    two_step_fit: bool = True# Enable two-step fit: 1) quick fit without Hesse, 2) precise error calculation
+    use_minos: bool = False# Use Minos for asymmetric errors (slow but accurate)
 
 
 @dataclass
@@ -270,17 +272,34 @@ class GenericFit:
         if self.dataset.numEntries() == 0:
             print("Error: dataset is empty")
             return None
-
-        self.result = self.model.fitTo(
-            self.dataset,
+        
+        # Common fit options
+        fit_options = [
             rf.Save(True),
             rf.NumCPU(self.fitter_cfg.num_cpu),
             rf.PrintLevel(self.fitter_cfg.print_level),
             rf.Strategy(self.fitter_cfg.strategy),
             rf.Minimizer(self.fitter_cfg.minimizer, self.fitter_cfg.algorithm),
-            rf.SumW2Error(True) # to correctly calculate errors with weights
-        )
-        # rf.AsymptoticError(True)
+            rf.SumW2Error(not self.fitter_cfg.use_minos)  # correctly calculate errors with weights
+        ]
+        
+        if self.fitter_cfg.two_step_fit:
+            # Step 1
+            print("\n=== Step 1: Finding minimum (Hesse=False) ===")
+            step1_options = fit_options + [rf.Hesse(False), rf.Minos(False)]
+            self.model.fitTo(self.dataset, *step1_options)
+            
+            # Step 2
+            print("\n=== Step 2: Calculating errors (Hesse=True) ===")
+            step2_options = fit_options + [rf.Hesse(True), rf.Minos(self.fitter_cfg.use_minos)]
+            self.result = self.model.fitTo(self.dataset, *step2_options)
+        else:
+            # Single-step fit (default behavior)
+            fit_options += [
+                rf.Hesse(True),  # Always calculate Hesse in single-step mode
+                rf.Minos(self.fitter_cfg.use_minos)
+            ]
+            self.result = self.model.fitTo(self.dataset, *fit_options)
         
         # Check fit quality
         self._check_fit_quality()
