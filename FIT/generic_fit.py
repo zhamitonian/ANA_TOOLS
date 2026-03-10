@@ -168,6 +168,9 @@ class GenericFit:
                  fitter_config: Optional[FitterConfig] = None,
                  dataset_config: Optional[DatasetConfig] = None,
                  
+                 # MC constraints (for fixing parameters from MC fit)
+                 mc_constrains: Optional[Tuple[Any, List[str]]] = None,
+                 
                  # Other
                  log_file: Optional[str] = None,
                  ):
@@ -192,6 +195,9 @@ class GenericFit:
         self.plot_cfg = plot_config or PlotConfiguration()
         self.fitter_cfg = fitter_config or FitterConfig()
         self.dataset_cfg = dataset_config or DatasetConfig()
+        
+        # MC constraints: (result, param_names)
+        self.mc_constrains = mc_constrains
         
         # Derived attributes
         self.variables = self.fit_def.variables
@@ -261,6 +267,41 @@ class GenericFit:
         # Create final model
         self.workspace.factory(f"SUM::model({model_factory_str})")
         self.model = self.workspace.pdf("model")
+    
+    def fix_parameters_from_result(self, result: Any, param_names: List[str]):
+        """Fix parameters from a previous fit result (e.g., MC fit)."""
+        if not self.workspace:
+            raise RuntimeError("Workspace not initialized.")
+        
+        print("\n=== Fixing parameters from MC fit ===")
+        fixed_count = 0
+        missing_params = []
+        
+        for param_name in param_names:
+            param_from_result = result.floatParsFinal().find(param_name)
+            
+            if not param_from_result:
+                missing_params.append(param_name)
+                continue
+            
+            value = param_from_result.getVal()
+            error = param_from_result.getError()
+            
+            param_in_workspace = self.workspace.var(param_name)
+            
+            if param_in_workspace:
+                param_in_workspace.setVal(value)
+                param_in_workspace.setConstant(True)
+                print(f"  Fixed {param_name} = {value:.6f} ± {error:.6f}")
+                fixed_count += 1
+            else:
+                missing_params.append(param_name)
+        
+        if missing_params:
+            print(f"  Warning: Parameters not found: {missing_params}")
+        
+        print(f"=== Fixed {fixed_count}/{len(param_names)} parameters ===\n")
+        return fixed_count
     
     def perform_fit(self):
         """Perform the fit."""
@@ -634,6 +675,12 @@ class GenericFit:
             # Workflow
             self.create_dataset()
             self.build_pdfs()
+            
+            # Fix parameters from MC if provided
+            if self.mc_constrains:
+                mc_result, param_names = self.mc_constrains
+                self.fix_parameters_from_result(mc_result, param_names)
+            
             self.build_model()
             self.perform_fit()
             
@@ -662,4 +709,12 @@ initial version
 v2.1.0
 - add weight branch support and sumw2error in fit
 date : 2026-01-23
+
+v2.1.1
+- add 2-step fit option ,
+- add para fix from MC fit result
+date : 2026-03-09
 """
+
+
+

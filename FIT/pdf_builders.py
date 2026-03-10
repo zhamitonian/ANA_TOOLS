@@ -430,8 +430,8 @@ class PolynomialBuilder(PDFBuilder):
         order = config.get("order", self.PARAMETERS["order"])
         
         coef_list = []
-        for i in range(order + 1):
-            # Check for individual coef setting
+        for i in range(order): # same situation as RooChebychev, the user give coefficiency starting from T_1(x)=x
+            i+=1 # get the correct coefficient index (coef1, coef2, ...)
             if f"coef{i}" in config:
                 coef_str = self._format_param(f"coef{i}", config[f"coef{i}"], pdf_name)
             else:
@@ -465,8 +465,9 @@ class ChebychevBuilder(PDFBuilder):
         order = config.get("order", self.PARAMETERS["order"])
         
         coef_list = []
-        for i in range(order + 1):
-            # Check for individual coef setting
+        #for i in range(order + 1):
+        for i in range(order): # in RooChebychev, the user give coefficiency starting from T_1(x)=x
+            i+=1 # get the correct coefficient index (coef1, coef2, ...)
             if f"coef{i}" in config:
                 coef_str = self._format_param(f"coef{i}", config[f"coef{i}"], pdf_name)
             else:
@@ -699,4 +700,9 @@ version: 2.1
 - Improved parameter parsing and formatting in PDFBuilder base class.
 date   : 2026-02-04
 author : wang zheng
+
+version: 2.2
+- fix order confusion in PolynomialBuilder and ChebychevBuilder
+date  : 2026-03-10
+author: wang zheng
 """
