@@ -4,11 +4,12 @@ PDF builder classes for constructing different types of signal and background PD
 This module provides a flexible way to construct various PDFs for fitting.
 Each builder encapsulates the logic for creating a specific type of PDF.
 
-version: 2.1
-date   : 2026-02-04
+version: 3.0
+date   : 2026-03-11
 author : wang zheng
 """
 
+import re
 import ROOT
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
@@ -88,9 +89,11 @@ class PDFBuilder(ABC):
             String for RooFit factory: "value" or "name[min,max]" or "name[init,min,max]"
             
         Examples:
-            value: 0.497 -> "0.497" (fixed)
-            value: (0.49, 0.50) -> "key_pdfname[0.49, 0.50]" (float, no init)
-            value: (0.497, 0.49, 0.50) -> "key_pdfname[0.497, 0.49, 0.50]" (float with init)
+            value: 0.497                          -> "0.497"
+            value: (0.49, 0.50)                   -> "key_pdfname[0.49, 0.50]"
+            value: (0.497, 0.49, 0.50)            -> "key_pdfname[0.497, 0.49, 0.50]"
+            value: (0.49, 0.50, "my_name")        -> "my_name[0.49, 0.50]"
+            value: (0.497, 0.49, 0.50, "my_name") -> "my_name[0.497, 0.49, 0.50]"
         """
         val = config.get(key, default_val)
         if val is None:
@@ -98,21 +101,79 @@ class PDFBuilder(ABC):
         return self._format_param(key, val, pdf_name)
     
     def _format_param(self, key: str, val: Any, pdf_name: str) -> str:
-        """Format parameter value to RooFit factory syntax string."""
+        """
+        Format parameter value to RooFit factory syntax string.
+
+        Supported config styles:
+            0.497                              -> "0.497"                              (fixed value)
+            (min, max)                         -> "key_pdfname[min, max]"              (float, no init)
+            (init, min, max)                   -> "key_pdfname[init, min, max]"        (float with init)
+            (min, max, "my_name")              -> "my_name[min, max]"                  (custom ws name)
+            (init, min, max, "my_name")        -> "my_name[init, min, max]"            (custom ws name)
+            "existing_var"                     -> "existing_var"                        (reference existing ws object)
+            "TYPE::name(...)"                  -> "TYPE::name(...)"                     (inline factory expr, passed through)
+            "mean * a[1,0.9,1.1]"             -> "expr::key_pdfname('mean * a',        (auto expr:: node)
+                                                         mean, a[1,0.9,1.1])"
+
+        The optional trailing string in a tuple overrides the default workspace
+        variable name ``{key}_{pdf_name}``.
+
+        For math expressions (strings that are not a plain identifier and do not
+        match ``TYPE::name(...)``), the method automatically wraps them in an
+        ``expr::`` factory call.  Inline variable definitions such as
+        ``a[1,0.9,1.1]`` are preserved in-place as RooFit factory dependency
+        arguments; they do **not** require the workspace to be passed — RooFit
+        creates them automatically when the outer factory string is compiled.
+        """
         if val is None:
             return None
         if isinstance(val, (int, float)):
             # Fixed value
             return str(val)
         elif isinstance(val, (list, tuple)):
-            if len(val) == 2:
-                # [min, max] - no initial value
-                return f"{key}_{pdf_name}[{val[0]}, {val[1]}]"
-            elif len(val) == 3:
-                # [init, min, max]
-                return f"{key}_{pdf_name}[{val[0]}, {val[1]}, {val[2]}]"
+            # Check for optional trailing string (custom workspace variable name)
+            if val and isinstance(val[-1], str):
+                ws_name = val[-1]
+                nums = val[:-1]
             else:
-                raise ValueError(f"Invalid range for {key}: {val}. Use value, (min,max), or (init,min,max)")
+                ws_name = f"{key}_{pdf_name}"
+                nums = val
+
+            if len(nums) == 2:
+                # (min, max)
+                return f"{ws_name}[{nums[0]}, {nums[1]}]"
+            elif len(nums) == 3:
+                # (init, min, max)
+                return f"{ws_name}[{nums[0]}, {nums[1]}, {nums[2]}]"
+            else:
+                raise ValueError(
+                    f"Invalid range for '{key}': {val}. "
+                    f"Use value, (min,max), (init,min,max), "
+                    f"or append a string for a custom name, e.g. (init,min,max,'name')."
+                )
+        elif isinstance(val, str):
+            s = val.strip()
+            # Case 1: plain identifier — reference an existing workspace object
+            if re.fullmatch(r'[A-Za-z_]\w*', s):
+                return s
+            # Case 2: full factory expression "TYPE::name(...)" — pass through as-is
+            # so RooFit can resolve it inline when the outer factory string is compiled
+            if re.match(r'\w+::\w+\s*\(', s):
+                return s
+            # Case 3: math expression — build expr:: factory string automatically.
+            # Inline variable defs like "a[1,0.9,1.1]" become factory dep arguments;
+            # strip them from the formula to get a clean TFormula string.
+            auto_name = f"{key}_{pdf_name}"
+            # Collect deps preserving order: items with inline def first, then bare names
+            deps_ordered = {}
+            for m in re.finditer(r'([A-Za-z_]\w*)\[([^\]]+)\]', s):
+                token = f"{m.group(1)}[{m.group(2)}]"
+                deps_ordered.setdefault(m.group(1), token)
+            formula = re.sub(r'([A-Za-z_]\w*)\[([^\]]+)\]', r'\1', s)
+            for name in re.findall(r'[A-Za-z_]\w*', formula):
+                deps_ordered.setdefault(name, name)
+            deps_str = ', '.join(deps_ordered.values())
+            return f"expr::{auto_name}('{formula}', {deps_str})"
         else:
             return str(val)
     
@@ -704,5 +765,17 @@ author : wang zheng
 version: 2.2
 - fix order confusion in PolynomialBuilder and ChebychevBuilder
 date  : 2026-03-10
+author: wang zheng
+
+version: 3.0
+- Extended _format_param to support three string input modes:
+  (1) plain identifier  -> passed through as-is (reference existing workspace object)
+  (2) "TYPE::name(...)" -> passed through as-is (inline factory expression, RooFit resolves it)
+  (3) math expression   -> automatically wrapped as expr::key_pdfname('formula', dep1, dep2[...])
+      Inline variable definitions like "a[1,0.9,1.1]" are preserved as factory dep arguments;
+      RooFit creates intermediate objects automatically when the outer factory string is compiled.
+- Extended tuple syntax: trailing string overrides default workspace variable name, e.g.
+  (init, min, max, "my_name") -> "my_name[init, min, max]"
+date  : 2026-03-11
 author: wang zheng
 """
