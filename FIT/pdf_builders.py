@@ -3,8 +3,13 @@ PDF builder classes for constructing different types of signal and background PD
 
 This module provides a flexible way to construct various PDFs for fitting.
 Each builder encapsulates the logic for creating a specific type of PDF.
+
+version: 3.0
+date   : 2026-03-11
+author : wang zheng
 """
 
+import re
 import ROOT
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
@@ -84,9 +89,11 @@ class PDFBuilder(ABC):
             String for RooFit factory: "value" or "name[min,max]" or "name[init,min,max]"
             
         Examples:
-            value: 0.497 -> "0.497" (fixed)
-            value: (0.49, 0.50) -> "key_pdfname[0.49, 0.50]" (float, no init)
-            value: (0.497, 0.49, 0.50) -> "key_pdfname[0.497, 0.49, 0.50]" (float with init)
+            value: 0.497                          -> "0.497"
+            value: (0.49, 0.50)                   -> "key_pdfname[0.49, 0.50]"
+            value: (0.497, 0.49, 0.50)            -> "key_pdfname[0.497, 0.49, 0.50]"
+            value: (0.49, 0.50, "my_name")        -> "my_name[0.49, 0.50]"
+            value: (0.497, 0.49, 0.50, "my_name") -> "my_name[0.497, 0.49, 0.50]"
         """
         val = config.get(key, default_val)
         if val is None:
@@ -94,21 +101,79 @@ class PDFBuilder(ABC):
         return self._format_param(key, val, pdf_name)
     
     def _format_param(self, key: str, val: Any, pdf_name: str) -> str:
-        """Format parameter value to RooFit factory syntax string."""
+        """
+        Format parameter value to RooFit factory syntax string.
+
+        Supported config styles:
+            0.497                              -> "0.497"                              (fixed value)
+            (min, max)                         -> "key_pdfname[min, max]"              (float, no init)
+            (init, min, max)                   -> "key_pdfname[init, min, max]"        (float with init)
+            (min, max, "my_name")              -> "my_name[min, max]"                  (custom ws name)
+            (init, min, max, "my_name")        -> "my_name[init, min, max]"            (custom ws name)
+            "existing_var"                     -> "existing_var"                        (reference existing ws object)
+            "TYPE::name(...)"                  -> "TYPE::name(...)"                     (inline factory expr, passed through)
+            "mean * a[1,0.9,1.1]"             -> "expr::key_pdfname('mean * a',        (auto expr:: node)
+                                                         mean, a[1,0.9,1.1])"
+
+        The optional trailing string in a tuple overrides the default workspace
+        variable name ``{key}_{pdf_name}``.
+
+        For math expressions (strings that are not a plain identifier and do not
+        match ``TYPE::name(...)``), the method automatically wraps them in an
+        ``expr::`` factory call.  Inline variable definitions such as
+        ``a[1,0.9,1.1]`` are preserved in-place as RooFit factory dependency
+        arguments; they do **not** require the workspace to be passed — RooFit
+        creates them automatically when the outer factory string is compiled.
+        """
         if val is None:
             return None
         if isinstance(val, (int, float)):
             # Fixed value
             return str(val)
         elif isinstance(val, (list, tuple)):
-            if len(val) == 2:
-                # [min, max] - no initial value
-                return f"{key}_{pdf_name}[{val[0]}, {val[1]}]"
-            elif len(val) == 3:
-                # [init, min, max]
-                return f"{key}_{pdf_name}[{val[0]}, {val[1]}, {val[2]}]"
+            # Check for optional trailing string (custom workspace variable name)
+            if val and isinstance(val[-1], str):
+                ws_name = val[-1]
+                nums = val[:-1]
             else:
-                raise ValueError(f"Invalid range for {key}: {val}. Use value, (min,max), or (init,min,max)")
+                ws_name = f"{key}_{pdf_name}"
+                nums = val
+
+            if len(nums) == 2:
+                # (min, max)
+                return f"{ws_name}[{nums[0]}, {nums[1]}]"
+            elif len(nums) == 3:
+                # (init, min, max)
+                return f"{ws_name}[{nums[0]}, {nums[1]}, {nums[2]}]"
+            else:
+                raise ValueError(
+                    f"Invalid range for '{key}': {val}. "
+                    f"Use value, (min,max), (init,min,max), "
+                    f"or append a string for a custom name, e.g. (init,min,max,'name')."
+                )
+        elif isinstance(val, str):
+            s = val.strip()
+            # Case 1: plain identifier — reference an existing workspace object
+            if re.fullmatch(r'[A-Za-z_]\w*', s):
+                return s
+            # Case 2: full factory expression "TYPE::name(...)" — pass through as-is
+            # so RooFit can resolve it inline when the outer factory string is compiled
+            if re.match(r'\w+::\w+\s*\(', s):
+                return s
+            # Case 3: math expression — build expr:: factory string automatically.
+            # Inline variable defs like "a[1,0.9,1.1]" become factory dep arguments;
+            # strip them from the formula to get a clean TFormula string.
+            auto_name = f"{key}_{pdf_name}"
+            # Collect deps preserving order: items with inline def first, then bare names
+            deps_ordered = {}
+            for m in re.finditer(r'([A-Za-z_]\w*)\[([^\]]+)\]', s):
+                token = f"{m.group(1)}[{m.group(2)}]"
+                deps_ordered.setdefault(m.group(1), token)
+            formula = re.sub(r'([A-Za-z_]\w*)\[([^\]]+)\]', r'\1', s)
+            for name in re.findall(r'[A-Za-z_]\w*', formula):
+                deps_ordered.setdefault(name, name)
+            deps_str = ', '.join(deps_ordered.values())
+            return f"expr::{auto_name}('{formula}', {deps_str})"
         else:
             return str(val)
     
@@ -150,6 +215,7 @@ class BreitWignerGaussBuilder(PDFBuilder):
         "mass": None,  # Required
         "width": None,  # Required
         "resolution": (0.00083, 0.0002, 0.0014),
+        "reso_mean" : 0,
     }
     
     def build(self, workspace: ROOT.RooWorkspace, var_name: str,
@@ -160,7 +226,7 @@ class BreitWignerGaussBuilder(PDFBuilder):
         workspace.factory(f"BreitWigner::bw_{var_name}({var_name}, {params['mass']}, {params['width']})")
         
         # Gaussian smearing
-        workspace.factory(f"Gaussian::gauss_{var_name}({var_name}, 0, {params['resolution']})")
+        workspace.factory(f"Gaussian::gauss_{var_name}({var_name}, {params['reso_mean']}, {params['resolution']})")
         
         # Convolution
         workspace.factory(f"FCONV::{pdf_name}({var_name}, bw_{var_name}, gauss_{var_name})")
@@ -250,25 +316,25 @@ class DoubleGaussianBreitWignerBuilder(PDFBuilder):
     
     def build(self, workspace: ROOT.RooWorkspace, var_name: str,
               config: Dict[str, Any], pdf_name: str) -> str:
-        params = self.get_params(config, var_name)
+        params = self.get_params(config, pdf_name)
         
         # Breit-Wigner
-        workspace.factory(f"BreitWigner::bw_{var_name}({var_name}, {params['mass']}, {params['width']})")
+        workspace.factory(f"BreitWigner::bw_{pdf_name}({var_name}, {params['mass']}, {params['width']})")
         
         # Core Gaussian
-        workspace.factory(f"Gaussian::gauss1_{var_name}({var_name}, 0, {params['sigma1']})")
+        workspace.factory(f"Gaussian::gauss1_{pdf_name}({var_name}, 0, {params['sigma1']})")
         
         # Tail Gaussian
-        workspace.factory(f"Gaussian::gauss2_{var_name}({var_name}, 0, {params['sigma2']})")
+        workspace.factory(f"Gaussian::gauss2_{pdf_name}({var_name}, 0, {params['sigma2']})")
         
         # Sum of Gaussians
         workspace.factory(
-            f"SUM::double_gauss_{var_name}({params['frac']} * gauss1_{var_name}, gauss2_{var_name})"
+            f"SUM::double_gauss_{pdf_name}({params['frac']} * gauss1_{pdf_name}, gauss2_{pdf_name})"
         )
         
         # Convolution
         workspace.factory(
-            f"FCONV::{pdf_name}({var_name}, bw_{var_name}, double_gauss_{var_name})"
+            f"FCONV::{pdf_name}({var_name}, bw_{pdf_name}, double_gauss_{pdf_name})"
         )
         
         return pdf_name
@@ -276,31 +342,79 @@ class DoubleGaussianBreitWignerBuilder(PDFBuilder):
 
 class CrystalBallBuilder(PDFBuilder):
     """
-    Build Crystal Ball PDF.
+    Build Crystal Ball PDF with flexible tail configuration.
     
-    Gaussian core with power-law tail, useful for asymmetric line shapes.
+    Automatically selects the appropriate RooCrystalBall constructor based on provided parameters:
+    
+    1. Single-sided CB (if alpha_right and n_right NOT provided):
+       Constructor: RooCrystalBall(x, mean, sigma, alpha, n, false)
+       Uses only left/single tail parameters
+    
+    2. Double-sided CB with symmetric Gaussian (if alpha_right and n_right provided, but NOT sigma_right):
+       Constructor: RooCrystalBall(x, mean, sigma, alphaL, nL, alphaR, nR)
+       Same sigma for both sides, different tail parameters
+    
+    3. Double-sided CB with asymmetric Gaussian (if alpha_right, n_right AND sigma_right all provided):
+       Constructor: RooCrystalBall(x, mean, sigmaL, sigmaR, alphaL, nL, alphaR, nR)
+       Different sigma and tail parameters for each side
     
     Config parameters (RooFit factory style):
-        - mean: value or (min, max) or (init, min, max)
-        - sigma: value or (min, max) or (init, min, max)
-        - alpha: value or (min, max) or (init, min, max) - tail parameter
-        - n: value or (min, max) or (init, min, max) - tail power
+        - mean: value or (min, max) or (init, min, max) - peak position (required)
+        - sigma: value or (min, max) or (init, min, max) - Gaussian core width (or left side if sigma_right given)
+        - alpha: value or (min, max) or (init, min, max) - tail parameter (left/single side)
+        - n: value or (min, max) or (init, min, max) - tail power (left/single side)
+        - alpha_right: value or (min, max) or (init, min, max) - right tail parameter (optional)
+        - n_right: value or (min, max) or (init, min, max) - right tail power (optional)
+        - sigma_right: value or (min, max) or (init, min, max) - right Gaussian width (optional)
     """
     
     PARAMETERS = {
         "mean": None,  # Required
-        "sigma": (0.001, 0.0001, 0.01),
-        "alpha": (1.5, 0, 5),
-        "n": (2.0, 0, 10),
+        "sigma": (0.001, 0.0001, 0.01), 
+        "alpha": (1.5, 0.001, 5),
+        "n": (2.0, 0.001, 10),
+        "alpha_right": None,
+        "n_right": None,
+        "sigma_right": None,
     }
     
     def build(self, workspace: ROOT.RooWorkspace, var_name: str,
               config: Dict[str, Any], pdf_name: str) -> str:
-        params = self.get_params(config, var_name)
+        params = self.get_params(config, pdf_name)
         
-        workspace.factory(
-            f"CBShape::{pdf_name}({var_name}, {params['mean']}, {params['sigma']}, {params['alpha']}, {params['n']})"
-        )
+        # Check which parameters are provided
+        has_alpha_right = "alpha_right" in config and config["alpha_right"] is not None
+        has_n_right = "n_right" in config and config["n_right"] is not None
+        has_sigma_right = "sigma_right" in config and config["sigma_right"] is not None
+        
+        if not has_alpha_right and not has_n_right:
+            workspace.factory(
+                f"CBShape::{pdf_name}({var_name}, {params['mean']}, "
+                f"{params['sigma']}, {params['alpha']}, {params['n']})"
+            )
+        elif has_alpha_right and has_n_right and not has_sigma_right:
+            workspace.factory(
+                #f"DSCBShape::{pdf_name}({var_name}, {params['mean']}, "
+                #f"{params['sigma']}, {params['alpha']}, {params['n']}, "
+                #f"{params['alpha_right']}, {params['n_right']})"
+                f"CrystalBall::{pdf_name}({var_name}, {params['mean']}, "
+                f"{params['sigma']}, {params['sigma']}, "
+                f"{params['alpha']}, {params['n']}, "
+                f"{params['alpha_right']}, {params['n_right']})"
+            )
+        elif has_alpha_right and has_n_right and has_sigma_right:
+            workspace.factory(
+                f"CrystalBall::{pdf_name}({var_name}, {params['mean']}, "
+                f"{params['sigma']}, {params['sigma_right']}, "
+                f"{params['alpha']}, {params['n']}, "
+                f"{params['alpha_right']}, {params['n_right']})"
+            )
+        else:
+            raise ValueError(
+                f"Invalid parameter combination for {pdf_name}. "
+                f"Either provide: (1) only alpha & n, or (2) alpha, n, alpha_right & n_right, "
+                f"or (3) alpha, n, alpha_right, n_right & sigma_right"
+            )
         
         return pdf_name
 
@@ -325,7 +439,7 @@ class VoigtianBuilder(PDFBuilder):
     
     def build(self, workspace: ROOT.RooWorkspace, var_name: str,
               config: Dict[str, Any], pdf_name: str) -> str:
-        params = self.get_params(config, var_name)
+        params = self.get_params(config, pdf_name)
         
         workspace.factory(
             f"Voigtian::{pdf_name}({var_name}, {params['mean']}, {params['width']}, {params['sigma']})"
@@ -350,7 +464,7 @@ class GaussianBuilder(PDFBuilder):
     
     def build(self, workspace: ROOT.RooWorkspace, var_name: str,
               config: Dict[str, Any], pdf_name: str) -> str:
-        params = self.get_params(config, var_name)
+        params = self.get_params(config, pdf_name)
         
         workspace.factory(f"Gaussian::{pdf_name}({var_name}, {params['mean']}, {params['sigma']})")
         
@@ -377,8 +491,8 @@ class PolynomialBuilder(PDFBuilder):
         order = config.get("order", self.PARAMETERS["order"])
         
         coef_list = []
-        for i in range(order + 1):
-            # Check for individual coef setting
+        for i in range(order): # same situation as RooChebychev, the user give coefficiency starting from T_1(x)=x
+            i+=1 # get the correct coefficient index (coef1, coef2, ...)
             if f"coef{i}" in config:
                 coef_str = self._format_param(f"coef{i}", config[f"coef{i}"], pdf_name)
             else:
@@ -412,8 +526,9 @@ class ChebychevBuilder(PDFBuilder):
         order = config.get("order", self.PARAMETERS["order"])
         
         coef_list = []
-        for i in range(order + 1):
-            # Check for individual coef setting
+        #for i in range(order + 1):
+        for i in range(order): # in RooChebychev, the user give coefficiency starting from T_1(x)=x
+            i+=1 # get the correct coefficient index (coef1, coef2, ...)
             if f"coef{i}" in config:
                 coef_str = self._format_param(f"coef{i}", config[f"coef{i}"], pdf_name)
             else:
@@ -449,7 +564,7 @@ class ArgusBGBuilder(PDFBuilder):
     
     def build(self, workspace: ROOT.RooWorkspace, var_name: str,
               config: Dict[str, Any], pdf_name: str) -> str:
-        params = self.get_params(config, var_name)
+        params = self.get_params(config, pdf_name)
         
         workspace.factory(
             f"ArgusBG::{pdf_name}({var_name}, {params['m0']}, {params['c']}, {params['p']})"
@@ -472,7 +587,7 @@ class ExponentialBuilder(PDFBuilder):
     
     def build(self, workspace: ROOT.RooWorkspace, var_name: str,
               config: Dict[str, Any], pdf_name: str) -> str:
-        params = self.get_params(config, var_name)
+        params = self.get_params(config, pdf_name)
         
         workspace.factory(f"Exponential::{pdf_name}({var_name}, {params['tau']})")
         
@@ -491,6 +606,100 @@ class FlatBuilder(PDFBuilder):
         workspace.factory(f"Uniform::{pdf_name}({var_name})")
         
         return pdf_name
+
+
+# template fit 
+class TemplateFitBuilder(PDFBuilder):
+    """
+    Build template PDF from MC data using either RooKeysPdf (unbinned) or RooHistPdf (binned).
+    
+    For unbinned fits: Uses RooKeysPdf to create a smooth kernel density estimation from MC data.
+    For binned fits: Creates a histogram template from MC data and builds RooHistPdf.
+    
+    Config parameters:
+        - template_file: Path to ROOT file containing MC template data (Required)
+        - tree_name: Name of TTree in template file (default: "event")
+        - var_name: Name of the variable in the tree (default: from var_name parameter)
+        - weight_branch: Branch name for event weights (optional)
+        - binned: Use binned template (RooHistPdf) instead of unbinned (RooKeysPdf) (default: False)
+        - nbins: Number of bins for histogram template (default: 100)
+        - range: Tuple (min, max) for variable range (default: from workspace variable)
+    """
+    # suppose the var name in mc is same as in workspace(real data) 
+    PARAMETERS = {
+        "template_file": None,  # Required
+        "tree_name": "event",
+        "weight_branch": None,
+        "binned": False,
+        "nbins": 100,
+        "range" : None,
+    }
+
+    def build(self, workspace: ROOT.RooWorkspace, var_name: str,
+              config: Dict[str, Any], pdf_name: str) -> str:
+        params = self.get_params(config, pdf_name)
+        
+        # Open template file and get MC tree
+        template_file = ROOT.TFile.Open(params["template_file"])
+        if not template_file or template_file.IsZombie():
+            raise RuntimeError(f"Cannot open template file: {params['template_file']}")
+        
+        tree = template_file.Get(params["tree_name"])
+        if not tree:
+            raise RuntimeError(f"Cannot find tree '{params['tree_name']}' in {params['template_file']}")
+        
+        # Get or create the observable variable in workspace
+        var = workspace.var(var_name)
+        if var is None:
+            # If variable doesn't exist, try to get range from config
+            var_range = config.get("range") 
+            if var_range and len(var_range) == 2:
+                workspace.factory(f"{var_name}[{var_range[0]}, {var_range[1]}]")
+                var = workspace.var(var_name)
+            else:
+                raise RuntimeError(f"Variable '{var_name}' not found in workspace and no range provided in config")
+        
+        # Create a temporary workspace for template dataset creation to avoid conflicts
+        temp_ws = ROOT.RooWorkspace("temp_ws_template", "Temporary workspace for template")
+        
+        # Create FIT_UTILS instance and use handle_dataset to create MC dataset
+        from .fit_tools import FIT_UTILS
+        var_config = [(var_name, var.getMin(), var.getMax())]
+        tools = FIT_UTILS(log_file=None, var_config=var_config)
+        
+        # Determine if we need binned dataset
+        binned = config.get("binned", self.PARAMETERS["binned"])
+        
+        # Use handle_dataset to create MC dataset in temporary workspace
+        mc_dataset = tools.handle_dataset(
+            input_tree=tree,
+            workspace=temp_ws,  # Use temporary workspace to avoid conflicts
+            branches_name=[var_name],  # Assume MC tree has same variable name
+            binned_fit=binned,
+            hist_bins=config.get("nbins", self.PARAMETERS["nbins"]),
+            weight_branch=params["weight_branch"],
+            save_rootFile=False
+        )
+        
+        # Import dataset to workspace
+        workspace.Import(mc_dataset, ROOT.RooFit.Rename(f"mc_dataset_{pdf_name}"))
+        
+        # Create template PDF based on binned or unbinned mode
+        if binned:
+            # For binned mode, mc_dataset is already a RooDataHist
+            # Create RooHistPdf directly
+            workspace.factory(f"RooHistPdf::{pdf_name}({var_name}, mc_dataset_{pdf_name})")
+        else:
+            # For unbinned mode, use RooKeysPdf (kernel density estimation)
+            # RooKeysPdf::pdf_name(var, dataset, mirrorOption, rho)
+            # mirrorOption: RooKeysPdf::NoMirror, Mirror, MirrorBoth, MirrorAsymBoth
+            # rho: kernel bandwidth as fraction of data range (typical: 1.0-2.0)
+            workspace.factory(
+                f"RooKeysPdf::{pdf_name}({var_name}, mc_dataset_{pdf_name}, RooKeysPdf::MirrorBoth, 2.0)"
+            )
+        return pdf_name
+
+        
 
 
 # ============================================================================
@@ -521,6 +730,7 @@ class PDFBuilderRegistry:
         self.register("argus", ArgusBGBuilder())
         self.register("exponential", ExponentialBuilder())
         self.register("flat", FlatBuilder())
+        self.register("template", TemplateFitBuilder())
     
     def register(self, name: str, builder: PDFBuilder):
         """Register a PDF builder."""
@@ -542,3 +752,30 @@ class PDFBuilderRegistry:
 
 # Global registry instance
 PDF_REGISTRY = PDFBuilderRegistry()
+
+"""
+version history:
+
+version: 2.1
+- Added TemplateFitBuilder for template-based PDFs using RooKeysPdf or RooHistPdf.
+- Improved parameter parsing and formatting in PDFBuilder base class.
+date   : 2026-02-04
+author : wang zheng
+
+version: 2.2
+- fix order confusion in PolynomialBuilder and ChebychevBuilder
+date  : 2026-03-10
+author: wang zheng
+
+version: 3.0
+- Extended _format_param to support three string input modes:
+  (1) plain identifier  -> passed through as-is (reference existing workspace object)
+  (2) "TYPE::name(...)" -> passed through as-is (inline factory expression, RooFit resolves it)
+  (3) math expression   -> automatically wrapped as expr::key_pdfname('formula', dep1, dep2[...])
+      Inline variable definitions like "a[1,0.9,1.1]" are preserved as factory dep arguments;
+      RooFit creates intermediate objects automatically when the outer factory string is compiled.
+- Extended tuple syntax: trailing string overrides default workspace variable name, e.g.
+  (init, min, max, "my_name") -> "my_name[init, min, max]"
+date  : 2026-03-11
+author: wang zheng
+"""
