@@ -21,8 +21,8 @@ from .model_parser import ModelParser
 
 """
 generic fit framework
-version : 2.1.0
-Date    : 2026-01-23
+version : 2.1.1
+Date    : 2026-03-12
 Author  : wangzheng
 """
 
@@ -256,17 +256,10 @@ class GenericFit:
                 ) from e
     
     def build_model(self):
-        """Build the complete model from structure string using parser."""
-        # Get first variable name for convolution operations
-        var_name = self.variables[0].name if self.variables else None
-        
-        # Use parser to build model
+        """Build model: resolve intermediate ops, then retrieve the final PDF."""
         parser = ModelParser(self.workspace)
-        model_factory_str, self.yield_vars = parser.parse_model(self.model_str, var_name)
-        
-        # Create final model
-        self.workspace.factory(f"SUM::model({model_factory_str})")
-        self.model = self.workspace.pdf("model")
+        model_name, self.yield_vars = parser.parse_model(self.model_str)
+        self.model = self.workspace.pdf(model_name.strip())
     
     def fix_parameters_from_result(self, result: Any, param_names: List[str]):
         """Fix parameters from a previous fit result (e.g., MC fit)."""
@@ -624,8 +617,10 @@ class GenericFit:
         # Yield values - only show nsig (signal yield)
         if legend_config.get("show_yields", True):
             var = self.workspace.var("nsig")
-            nsig = var.getVal() 
-            nsig_err = var.getError()
+            #nsig = var.getVal() 
+            #nsig_err = var.getError()
+            nsig = self.fit_results.get("nsig", 0)
+            nsig_err = self.fit_results.get("nsig_err", 0)
             leg.AddEntry(0, f"N_{{sig}} = {nsig:.1f} #pm {nsig_err:.1f}", "")
         
         # Extra text entries
@@ -714,6 +709,10 @@ v2.1.1
 - add 2-step fit option ,
 - add para fix from MC fit result
 date : 2026-03-09
+
+v2.1.2
+- optimize model parser
+date : 2026-03-12
 """
 
 
