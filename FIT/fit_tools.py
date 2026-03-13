@@ -13,8 +13,8 @@ from ROOT import RooStats
 
 """
 fit tools utility
-version : 2.1.0
-Date    : 2026-01-23
+version : 2.1.1
+Date    : 2026-03-12
 Author  : wangzheng
 """
 
@@ -81,7 +81,7 @@ class FIT_UTILS():
 
     def handle_dataset(self, input_tree: ROOT.TTree, 
                    workspace: ROOT.RooWorkspace, 
-                   branches_name: Optional[List[str]] = None, 
+                   branches_name: Optional[List[str]] = None,  # to handle vector branches
                    binned_fit: bool = False,
                    hist_bins: int = 100,
                    weight_branch : Optional[str] = None,
@@ -92,7 +92,7 @@ class FIT_UTILS():
         Args:
             input_tree: ROOT TTree object
             workspace: RooWorkspace object
-            branches_name: List of branch names to combine
+            branches_name: Create dataset from these branches; if None, use var_config[0]
             binned_fit: If True, create RooDataHist; if False, create RooDataSet
             hist_bins: Number of bins for histogram (only for binned mode)
             weight_branch: Optional branch name for event weights
@@ -103,19 +103,18 @@ class FIT_UTILS():
         """
         if input_tree is None:
             raise ValueError("input_tree must be provided")
-        print(type(input_tree)) 
         var_configs = self.var_config
         
         # Create RooRealVariables in workspace
         arg_set = ROOT.RooArgSet()
         for config in var_configs:
-            workspace.factory(f"{config[0]}[{config[1]},{config[2]}]") 
+            workspace.factory(f"{config[0]}[{config[1]},{config[2]}]")
             arg_set.add(workspace.var(config[0]))
         if weight_branch is not None:
             workspace.factory(f"{weight_branch}[0, 1000000]")
             weight_var = workspace.var(weight_branch)
             arg_set.add(weight_var)
-
+        
         fit_var = workspace.var(var_configs[0][0])
         var_min, var_max = var_configs[0][1], var_configs[0][2]
 
@@ -132,7 +131,7 @@ class FIT_UTILS():
                 return dataset
 
             # save file not supported for vector branches yet
-            if save_rootFile:
+            if save_rootFile: # this part logical will be removed in future
                 df = ROOT.RDataFrame(input_tree)
                 temp_files = [f"temp_{i}.root" for i in range(len(branches_name))]
                 for i,branch_name in enumerate(branches_name):
@@ -290,7 +289,10 @@ class FIT_UTILS():
                 print("Warning: Empty histogram created")
             
             # Create RooDataHist from histogram
-            datahist = ROOT.RooDataHist("datahist", "Binned dataset", arg_set, histogram)
+            # For binned mode, only use the fit variable (not weight) in arg_set
+            # Weight is already incorporated in the histogram bin contents
+            arg_set_binned = ROOT.RooArgSet(fit_var)
+            datahist = ROOT.RooDataHist("datahist", "Binned dataset", arg_set_binned, histogram)
             print(f"Created RooDataHist with {datahist.sumEntries()} entries")
             print(f"Number of bins: {datahist.numEntries()}")
             
@@ -490,7 +492,7 @@ class QUICK_FIT():
         results = np.zeros((self.total_bins, results_columns))
 
         # Initialize results file if it doesn't exists
-        results_file = os.path.join(output_dir, "nsig_results.txt")
+        results_file = os.path.join(output_dir, "nsig_results.csv")
         if not os.path.isfile(results_file):
             self._initialize_results_file(results_file)
 
@@ -538,7 +540,7 @@ class QUICK_FIT():
                 range_use = ";".join(range_lines)
                 bin_desc = self._format_bin_description(bin_indices, ranges)
                 
-                print("-----------------------")
+                print("-----------------------------------------------------------------------")
                 print(f"Processing bin {flat_bin_idx}: {bin_desc}")
                 print(f"Bin indices: {bin_indices}")
                 
@@ -595,7 +597,7 @@ class QUICK_FIT():
                         combined_condition = " && ".join(vector_conditions)
                         
                         # Apply selection to provided branches
-                        for branch_name in branches_name + [weight_branch if weight_branch else []]:
+                        for branch_name in (branches_name or []) + ([weight_branch] if weight_branch else []):
                             try:
                                 branch_type = rf.GetColumnType(branch_name)
                                 if "vector" in branch_type.lower() or "rvec" in branch_type.lower():
@@ -606,6 +608,7 @@ class QUICK_FIT():
                     # Save filtered tree to temporary file
                     print(f"Creating temporary tree for fitting...")
 
+                    rf.Report().Print()  
                     #temp_file_path = f"{output_dir}temp_bin_{flat_bin_idx}.root"
                     rf.Snapshot("event", temp_file_path)
                 
@@ -693,7 +696,7 @@ class QUICK_FIT():
         self._save_results(results_file, results)
 
         end_time = time.time()
-        print("-----------------------")
+        print("-----------------------------------------------------------------------")
         print(f"Batch fitting complete! Successfully fit {successful_fits}/{len(bins_to_fit)} bins.")
         if failed_bins:
             print(f"Failed bins: {failed_bins}")
@@ -716,73 +719,49 @@ class QUICK_FIT():
     '''
 
     def _save_results(self, results_file: str, results: np.ndarray):
-        """Save fit results to file - only update modified lines"""
-        
-        # First time: create file with header and empty lines
+        """Create results CSV with header if it doesn't exist yet."""
         if not os.path.isfile(results_file):
             with open(results_file, "w") as f:
-                # Write header
                 header_parts = []
                 for dim_idx in range(self.n_dimensions):
                     var_name = self.bin_var_configs[dim_idx][0]
                     header_parts.extend([f"{var_name}_center", f"{var_name}_width"])
-                header_parts.extend(["nsig", "nsig_err", "nsig_err"])
-                f.write("# " + "  ".join(header_parts) + "\n")
-                
-                # Write empty lines (or zeros) for all bins
+                header_parts.extend(["nsig", "nsig_err_lo", "nsig_err_hi"])
+                f.write(",".join(header_parts) + "\n")
                 for i in range(self.total_bins):
-                    row_str = "  ".join(["0.0000"] * results.shape[1])
-                    f.write(row_str + "\n")
+                    f.write(",".join(["0.0000"] * results.shape[1]) + "\n")
             print(f"Initialized results file: {results_file}")
 
     def _save_single_bin_result(self, results_file: str, bin_idx: int, result_row: np.ndarray):
-        """Save single bin result - thread-safe with file locking"""
-        
+        """Write one bin's result into the CSV (thread-safe)."""
         lock_file = results_file + ".lock"
         with open(lock_file, 'w') as lock:
-            # Acquire exclusive lock
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX)
-            
             try:
-                # Initialize file if it doesn't exist
                 if not os.path.isfile(results_file):
                     self._initialize_results_file(results_file)
-                
-                # Read all lines
                 with open(results_file, "r") as f:
                     lines = f.readlines()
-                
-                # Update the specific line
                 line_idx = bin_idx + 1  # +1 for header
                 if line_idx < len(lines):
-                    row_str = "  ".join([f"{val:.4f}" for val in result_row]) + "\n"
-                    lines[line_idx] = row_str
-                    
-                    # Write back
+                    lines[line_idx] = ",".join([f"{val:.4f}" for val in result_row]) + "\n"
                     with open(results_file, "w") as f:
                         f.writelines(lines)
-                    
-                    #print(f"Saved bin {bin_idx} to {results_file}")
-                    
             finally:
                 fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
     
     def _initialize_results_file(self, results_file: str):
-        """Initialize results file with header and empty lines"""
+        """Create CSV file with header and zero-filled rows."""
         header_parts = []
         for dim_idx in range(self.n_dimensions):
             var_name = self.bin_var_configs[dim_idx][0]
             header_parts.extend([f"{var_name}_center", f"{var_name}_width"])
-        header_parts.extend(["nsig", "nsig_err", "nsig_err"])
-        header = "# " + "  ".join(header_parts) + "\n"
-        
+        header_parts.extend(["nsig", "nsig_err_lo", "nsig_err_hi"])
+        n_cols = 2 * self.n_dimensions + 3
         with open(results_file, "w") as f:
-            f.write(header)
-            # Write empty lines for all bins
-            n_cols = 2 * self.n_dimensions + 3
+            f.write(",".join(header_parts) + "\n")
             for i in range(self.total_bins):
-                f.write("  ".join(["0.0000"] * n_cols) + "\n")
-        
+                f.write(",".join(["0.0000"] * n_cols) + "\n")
         print(f"Initialized results file: {results_file}")
         
 
@@ -842,6 +821,10 @@ class QUICK_FIT():
 """
 v2.1.0 
 - add weight branch support
-date : 2025-01-23
+date : 2026-01-23
+
+v2.1.1
+- change the output format of the results file to standard csv 
+date : 2026-03-12
 
 """
