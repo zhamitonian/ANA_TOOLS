@@ -21,8 +21,8 @@ from .model_parser import ModelParser
 
 """
 generic fit framework
-version : 2.1.1
-Date    : 2026-03-12
+version : 2.1.3
+Date    : 2026-03-13
 Author  : wangzheng
 """
 
@@ -86,7 +86,60 @@ class FitDefinition:
 
 @dataclass
 class PlotConfiguration:
-    """Plotting configuration."""
+    """
+    Plotting configuration.
+
+    Attributes:
+        plot_vars:
+            Variables to plot. If None, all fit variables are plotted.
+
+        plot_config:
+            Optional dict controlling plotting behavior. Supported keys:
+
+            - show_pull (bool, default: True)
+                Whether to draw the pull panel.
+
+            - show_legend (bool, default: True)
+                Whether to draw legend.
+
+            - xlabel (dict[str, str])
+                Per-variable x-axis labels, e.g. {"Ks_M": "M_{#pi^{+}#pi^{-}} (GeV/c^{2})"}.
+
+            - ylabel (dict[str, str])
+                Per-variable y-axis labels.
+
+            - components (dict)
+                Plot style for total model and components.
+                "model" controls the total fit line;
+                other keys should match PDF/component names.
+                Each component style supports:
+                    {"label": str, "color": int, "style": int, "width": int}
+
+            - legend (dict)
+                Legend options:
+                    x1, x2, y2 (float): legend box position
+                    show_chi2 (bool, default: True)
+                    show_yields (bool, default: True)
+                    extra_text (list[str])
+            
+            - no-pull layout overrides (used when show_pull=False)
+                y_title_offset_no_pull (float, default: 1.2)
+                x_label_size_no_pull (float, default: 0.045)
+                x_title_size_no_pull (float, default: 0.045)
+                x_title_offset_no_pull (float, default: 1.0)
+                legend_entry_height_no_pull (float, default: 0.035)
+
+    Example:
+        PlotConfiguration(plot_config={
+            "show_pull": False,
+            "xlabel": {"Ks_M": "M_{#pi^{+}#pi^{-}} (GeV/c^{2})"},
+            "components": {
+                "model": {"label": "Total Fit", "color": 4, "style": 1, "width": 2},
+                "bkg": {"label": "Background", "color": 2, "style": 2, "width": 2},
+            },
+            "legend": {"extra_text": ["Example"]},
+        })
+    """
     plot_vars: Optional[List[str]] = None      # Variables to plot (None = all)
     plot_config: Dict[str, Any] = field(default_factory=dict)  # Detailed plot settings
 
@@ -455,18 +508,31 @@ class GenericFit:
             var_name, 
             f"Candidates / ({((x_max - x_min) / nbin * 1000):.3f} MeV/c^{{2}})"
         )
+        show_pull = plot_dict.get("show_pull", True)
+
+        # Dedicated defaults when pull panel is hidden (can be overridden in plot_config)
+        y_title_offset_no_pull = plot_dict.get("y_title_offset_no_pull", 1.2)
+        x_label_size_no_pull = plot_dict.get("x_label_size_no_pull", 0.045)
+        x_title_size_no_pull = plot_dict.get("x_title_size_no_pull", 0.045)
+        x_title_offset_no_pull = plot_dict.get("x_title_offset_no_pull", 1.0)
+        legend_entry_height_no_pull = plot_dict.get("legend_entry_height_no_pull", 0.035)
         
         # Setup canvas
         canvas = ROOT.TCanvas("c", "c", 1600, 1080)
-        canvas.Divide(1, 2)
+        if show_pull:
+            canvas.Divide(1, 2)
         
         # Keep reference to legend to prevent garbage collection
         legend = None
         
         # Upper pad
         pad1 = canvas.cd(1)
-        pad1.SetPad(0, 0.3, 1, 1)
-        pad1.SetBottomMargin(0.01)
+        if show_pull:
+            pad1.SetPad(0, 0.3, 1, 1)
+            pad1.SetBottomMargin(0.01)
+        else:
+            pad1.SetPad(0, 0, 1, 1)
+            pad1.SetBottomMargin(0.12)
         pad1.SetLeftMargin(0.15)
         pad1.SetRightMargin(0.05)
         pad1.Draw()
@@ -509,39 +575,51 @@ class GenericFit:
 
         frame.SetTitle("")
         frame.GetYaxis().SetTitle(ylabel)
-        frame.GetYaxis().SetTitleOffset(1)
+        frame.GetYaxis().SetTitleOffset(1.0 if show_pull else y_title_offset_no_pull)
+
+        if show_pull:
+            frame.GetXaxis().SetLabelSize(0)
+            frame.GetXaxis().SetTitle("")
+        else:
+            frame.GetXaxis().SetTitle(xlabel)
+            frame.GetXaxis().CenterTitle()
+            frame.GetXaxis().SetLabelSize(x_label_size_no_pull)
+            frame.GetXaxis().SetTitleSize(x_title_size_no_pull)
+            frame.GetXaxis().SetTitleOffset(x_title_offset_no_pull)
         frame.Draw()
         
         # Draw legend on pad1
         if plot_dict.get("show_legend", True):
-            legend = self._draw_legend(frame, var_name, nbin)
-        
-        # Lower pad: pull distribution
-        pad2 = canvas.cd(2)
-        pad2.SetPad(0, 0, 1, 0.3)
-        pad2.SetTopMargin(0.01)
-        pad2.SetBottomMargin(0.3)
-        pad2.SetLeftMargin(0.15)
-        pad2.SetRightMargin(0.05)
-        pad2.Draw()
-        
-        pull_frame = var.frame()
-        pull_frame.SetTitle("")
-        pull_frame.GetYaxis().SetTitle("Pull")
-        pull_frame.GetYaxis().SetTitleOffset(0.35)
-        pull_frame.GetYaxis().SetTitleSize(0.1)
-        pull_frame.GetYaxis().CenterTitle()
-        pull_frame.GetYaxis().SetRangeUser(-5, 5)
-        pull_frame.GetYaxis().SetLabelSize(0.1)
-        pull_frame.GetXaxis().SetLabelSize(0.13)
-        pull_frame.GetXaxis().SetTitle(xlabel)
-        pull_frame.GetXaxis().CenterTitle()
-        pull_frame.GetXaxis().SetTitleSize(0.12)
-        pull_frame.GetXaxis().SetTitleOffset(1.1)
-        
-        pullhist = frame.pullHist("data", "sum")
-        pull_frame.addObject(pullhist, "P")
-        pull_frame.Draw()
+            legend_entry_h = 0.05 if show_pull else legend_entry_height_no_pull
+            legend = self._draw_legend(frame, var_name, nbin, entry_height=legend_entry_h)
+
+        if show_pull:
+            # Lower pad: pull distribution
+            pad2 = canvas.cd(2)
+            pad2.SetPad(0, 0, 1, 0.3)
+            pad2.SetTopMargin(0.01)
+            pad2.SetBottomMargin(0.3)
+            pad2.SetLeftMargin(0.15)
+            pad2.SetRightMargin(0.05)
+            pad2.Draw()
+
+            pull_frame = var.frame()
+            pull_frame.SetTitle("")
+            pull_frame.GetYaxis().SetTitle("Pull")
+            pull_frame.GetYaxis().SetTitleOffset(0.35)
+            pull_frame.GetYaxis().SetTitleSize(0.1)
+            pull_frame.GetYaxis().CenterTitle()
+            pull_frame.GetYaxis().SetRangeUser(-5, 5)
+            pull_frame.GetYaxis().SetLabelSize(0.1)
+            pull_frame.GetXaxis().SetLabelSize(0.13)
+            pull_frame.GetXaxis().SetTitle(xlabel)
+            pull_frame.GetXaxis().CenterTitle()
+            pull_frame.GetXaxis().SetTitleSize(0.12)
+            pull_frame.GetXaxis().SetTitleOffset(1.1)
+
+            pullhist = frame.pullHist("data", "sum")
+            pull_frame.addObject(pullhist, "P")
+            pull_frame.Draw()
         
         # Update canvas
         canvas.cd()
@@ -553,7 +631,7 @@ class GenericFit:
         canvas.SaveAs(output_path)
         print(f"Plot saved: {output_path}")
     
-    def _draw_legend(self, frame, var_name: str, nbin: int):
+    def _draw_legend(self, frame, var_name: str, nbin: int, entry_height: float = 0.05):
         """Draw legend on the plot and return the legend object."""
         # Get legend configuration
         plot_dict = self.plot_cfg.plot_config
@@ -573,7 +651,7 @@ class GenericFit:
         x1 = legend_config.get("x1", 0.7)
         x2 = legend_config.get("x2", 0.95)
         y2 = legend_config.get("y2", 0.9)
-        y1 = y2 - 0.05 * total_entries
+        y1 = y2 - entry_height * total_entries
         
         leg = ROOT.TLegend(x1, y1, x2, y2)
         leg.SetBorderSize(0)
@@ -670,13 +748,13 @@ class GenericFit:
             # Workflow
             self.create_dataset()
             self.build_pdfs()
+            self.build_model()
             
             # Fix parameters from MC if provided
             if self.mc_constrains:
                 mc_result, param_names = self.mc_constrains
                 self.fix_parameters_from_result(mc_result, param_names)
             
-            self.build_model()
             self.perform_fit()
             
             if self.dataset_cfg.perform_splot:
@@ -713,6 +791,10 @@ date : 2026-03-09
 v2.1.2
 - optimize model parser
 date : 2026-03-12
+
+v2.1.3
+- add more plot config options and show pull control
+date : 2026-03-13
 """
 
 
