@@ -21,8 +21,8 @@ from .model_parser import ModelParser
 
 """
 generic fit framework
-version : 2.1.3
-Date    : 2026-03-13
+version : 2.1.4
+Date    : 2026-03-16
 Author  : wangzheng
 """
 
@@ -121,6 +121,18 @@ class PlotConfiguration:
                     show_chi2 (bool, default: True)
                     show_yields (bool, default: True)
                     extra_text (list[str])
+
+            - logy (bool | dict[str, bool], default: False)
+                Control log-scale y-axis plotting.
+                - bool: apply to all plotted variables
+                - dict: per-variable override, e.g. {"Ks_M": True}
+
+            - y_range (tuple[float, float] | dict)
+                Control y-axis range.
+                - tuple/list: (ymin, ymax) for all variables
+                - dict[str, tuple/list]: per-variable range, e.g. {"Ks_M": (1, 5000)}
+                - dict[str, dict]: per-variable min/max, e.g. {"Ks_M": {"min": 1, "max": 5000}}
+                Note: when `logy=True` and `y_range` is not set, ymax defaults to 10x of frame maximum.
             
             - no-pull layout overrides (used when show_pull=False)
                 y_title_offset_no_pull (float, default: 1.2)
@@ -133,6 +145,8 @@ class PlotConfiguration:
         PlotConfiguration(plot_config={
             "show_pull": False,
             "xlabel": {"Ks_M": "M_{#pi^{+}#pi^{-}} (GeV/c^{2})"},
+            "logy": {"Ks_M": True},
+            "y_range": {"Ks_M": (1, 8000)},
             "components": {
                 "model": {"label": "Total Fit", "color": 4, "style": 1, "width": 2},
                 "bkg": {"label": "Background", "color": 2, "style": 2, "width": 2},
@@ -510,6 +524,13 @@ class GenericFit:
         )
         show_pull = plot_dict.get("show_pull", True)
 
+        # Log-scale control: bool for global, or dict for per-variable
+        logy_cfg = plot_dict.get("logy", False)
+        if isinstance(logy_cfg, dict):
+            use_logy = bool(logy_cfg.get(var_name, False))
+        else:
+            use_logy = bool(logy_cfg)
+
         # Dedicated defaults when pull panel is hidden (can be overridden in plot_config)
         y_title_offset_no_pull = plot_dict.get("y_title_offset_no_pull", 1.2)
         x_label_size_no_pull = plot_dict.get("x_label_size_no_pull", 0.045)
@@ -535,6 +556,7 @@ class GenericFit:
             pad1.SetBottomMargin(0.12)
         pad1.SetLeftMargin(0.15)
         pad1.SetRightMargin(0.05)
+        pad1.SetLogy(1 if use_logy else 0)
         pad1.Draw()
         
         # Create frame and plot
@@ -572,6 +594,38 @@ class GenericFit:
                 rf.LineStyle(comp_config.get("style", 1)),
                 rf.LineWidth(comp_config.get("width", 2))
             )
+
+        # Y-axis range control
+        y_range_cfg = plot_dict.get("y_range", None)
+        y_min = None
+        y_max = None
+        if y_range_cfg is not None:
+            if isinstance(y_range_cfg, dict):
+                var_range = y_range_cfg.get(var_name)
+            else:
+                var_range = y_range_cfg
+
+            if isinstance(var_range, (tuple, list)) and len(var_range) == 2:
+                y_min, y_max = var_range
+            elif isinstance(var_range, dict):
+                y_min = var_range.get("min")
+                y_max = var_range.get("max")
+
+        frame_max = frame.GetMaximum()
+        if frame_max <= 0:
+            frame_max = 1.0
+
+        # For log-scale, default ymax is 10x maximum when user does not provide y_range
+        if y_max is not None:
+            frame.SetMaximum(float(y_max))
+        elif use_logy:
+            frame.SetMaximum(frame_max * 5.0)
+
+        if y_min is not None:
+            frame.SetMinimum(float(y_min))
+        elif use_logy:
+            frame.SetMinimum(max(frame_max * 1e-3, 10))
+            #frame.SetMinimum(10)
 
         frame.SetTitle("")
         frame.GetYaxis().SetTitle(ylabel)
@@ -760,8 +814,8 @@ class GenericFit:
             if self.dataset_cfg.perform_splot:
                 self.perform_splot()
             
-            self.plot_results()
             self.save_results()
+            self.plot_results()
             self.print_summary()
         
         return self.result, self.fit_results
@@ -795,6 +849,11 @@ date : 2026-03-12
 v2.1.3
 - add more plot config options and show pull control
 date : 2026-03-13
+
+v2.1.4
+- add y-axis range control in plotting
+- add log-scale control in plotting
+date : 2026-03-16
 """
 
 
