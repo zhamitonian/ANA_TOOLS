@@ -4,8 +4,8 @@ PDF builder classes for constructing different types of signal and background PD
 This module provides a flexible way to construct various PDFs for fitting.
 Each builder encapsulates the logic for creating a specific type of PDF.
 
-version: 3.0
-date   : 2026-03-11
+version: 3.1
+date   : 2026-03-16
 author : wang zheng
 """
 
@@ -471,6 +471,36 @@ class GaussianBuilder(PDFBuilder):
         return pdf_name
 
 
+class BifurGaussBuilder(PDFBuilder):
+    """
+    Build asymmetric Gaussian PDF using RooBifurGauss.
+
+    This PDF uses different Gaussian widths on the left and right side
+    of the mean.
+
+    Config parameters (RooFit factory style):
+        - mean: value or (min, max) or (init, min, max)
+        - sigma_left: value or (min, max) or (init, min, max)
+        - sigma_right: value or (min, max) or (init, min, max)
+    """
+
+    PARAMETERS = {
+        "mean": 0,
+        "sigma_left": (0.01, 0.001, 0.1),
+        "sigma_right": (0.01, 0.001, 0.1),
+    }
+
+    def build(self, workspace: ROOT.RooWorkspace, var_name: str,
+              config: Dict[str, Any], pdf_name: str) -> str:
+        params = self.get_params(config, pdf_name)
+
+        workspace.factory(
+            f"BifurGauss::{pdf_name}({var_name}, {params['mean']}, {params['sigma_left']}, {params['sigma_right']})"
+        )
+
+        return pdf_name
+
+
 class PolynomialBuilder(PDFBuilder):
     """
     Build polynomial background PDF.
@@ -725,6 +755,7 @@ class PDFBuilderRegistry:
         self.register("crystal_ball", CrystalBallBuilder())
         self.register("voigtian", VoigtianBuilder())
         self.register("gaussian", GaussianBuilder())
+        self.register("bifur_gauss", BifurGaussBuilder())
         self.register("polynomial", PolynomialBuilder())
         self.register("chebychev", ChebychevBuilder())
         self.register("argus", ArgusBGBuilder())
@@ -777,5 +808,11 @@ version: 3.0
 - Extended tuple syntax: trailing string overrides default workspace variable name, e.g.
   (init, min, max, "my_name") -> "my_name[init, min, max]"
 date  : 2026-03-11
+author: wang zheng
+
+version: 3.1
+- Added `BifurGaussBuilder` for asymmetric Gaussian modeling via RooBifurGauss.
+- Registered new PDF type: `bifur_gauss`.
+date  : 2026-03-16
 author: wang zheng
 """
