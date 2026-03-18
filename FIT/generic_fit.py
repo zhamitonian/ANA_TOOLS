@@ -21,8 +21,8 @@ from .model_parser import ModelParser
 
 """
 generic fit framework
-version : 2.1.4
-Date    : 2026-03-16
+version : 2.1.5
+Date    : 2026-03-18
 Author  : wangzheng
 """
 
@@ -624,7 +624,7 @@ class GenericFit:
         if y_min is not None:
             frame.SetMinimum(float(y_min))
         elif use_logy:
-            frame.SetMinimum(max(frame_max * 1e-3, 10))
+            frame.SetMinimum(min(frame_max * 1e-3, 3))
             #frame.SetMinimum(10)
 
         frame.SetTitle("")
@@ -738,13 +738,23 @@ class GenericFit:
         
         # Chi-square/ndf
         if self.result and legend_config.get("show_chi2", True):
-            chi2 = frame.chiSquare("sum", "data")
-            data_hist = frame.getHist("data")
-            nBins = data_hist.GetN()
+            """Some time this method not sensible 
             nPars = self.result.floatParsFinal().getSize()
-            ndf = nBins - nPars
-            chi2_val = chi2 * ndf
+            chi2_ndf = frame.chiSquare("sum", "data", nPars)
+
+            data_hist = frame.getHist("data")
+            nBins = data_hist.GetN() if data_hist else 0
+            ndf = max(nBins - nPars, 1)
+            chi2_val = chi2_ndf * ndf
             leg.AddEntry(0, f"#chi^{{2}}/ndf = {chi2_val:.1f}/{ndf}", "")
+            """
+            chi2_var = ROOT.RooChi2Var("chi2", "chi2", self.model, self.dataset)
+            chi2 = chi2_var.getVal()
+            n_float = self.result.floatParsFinal().getSize()
+            ndf = self.dataset.numEntries() - n_float  
+            chi2_ndf = chi2 / ndf
+            leg.AddEntry(0, f"#chi^{{2}}/ndf = {chi2:.1f}/{ndf}", "")
+
         
         # Yield values - only show nsig (signal yield)
         if legend_config.get("show_yields", True):
@@ -854,6 +864,10 @@ v2.1.4
 - add y-axis range control in plotting
 - add log-scale control in plotting
 date : 2026-03-16
+
+v2.1.5
+- fix little bug in chi2 calculation in legend (wrong ndf)
+date : 2026-03-18
 """
 
 
