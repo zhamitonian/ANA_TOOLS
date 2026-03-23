@@ -13,8 +13,8 @@ from ROOT import RooStats
 
 """
 fit tools utility
-version : 2.1.1
-Date    : 2026-03-12
+version : 2.1.2
+Date    : 2026-03-23
 Author  : wangzheng
 """
 
@@ -601,7 +601,30 @@ class QUICK_FIT():
                             try:
                                 branch_type = rf.GetColumnType(branch_name)
                                 if "vector" in branch_type.lower() or "rvec" in branch_type.lower():
-                                    rf = rf.Redefine(branch_name, f"{branch_name}[{combined_condition}]")
+                                    branch_type_lower = branch_type.lower()
+                                    if "double" in branch_type_lower:
+                                        nan_vec = f"ROOT::VecOps::RVec<double>({branch_name}.size(), TMath::QuietNaN())"
+                                    elif "float" in branch_type_lower:
+                                        nan_vec = f"ROOT::VecOps::RVec<float>({branch_name}.size(), static_cast<float>(TMath::QuietNaN()))"
+                                    else:
+                                        # NaN is only valid for floating-point vectors.
+                                        # Keep legacy compaction for non-floating vectors.
+                                        rf = rf.Redefine(branch_name, f"{branch_name}[{combined_condition}]")
+                                        rf = rf.Filter(f"Size({branch_name}) > 0", f"Keep events with non-empty {branch_name} after filtering")
+                                        continue
+
+                                    rf = rf.Redefine(
+                                        branch_name,
+                                        f"ROOT::VecOps::Where({combined_condition}, {branch_name}, {nan_vec})"
+                                        #f"ROOT::VecOps::Where({combined_condition}, {branch_name}, TMath::QuietNaN())" # may change branch type to double
+                                    )
+                                        #f"ROOT::VecOps::Where({combined_condition}, {branch_name}, TMath::QuietNaN())"
+                                    # Drop events where this vector has no valid (non-NaN) entries.
+                                    # NaN is never equal to itself, so x==x is True only for non-NaN values.
+                                    rf = rf.Filter(
+                                        f"Any({branch_name} == {branch_name})",
+                                        f"Keep events with at least one valid entry in {branch_name}"
+                                    )
                             except Exception as e:
                                 print(f"Warning: Could not filter branch {branch_name}: {e}")
                                 
@@ -826,5 +849,9 @@ date : 2026-01-23
 v2.1.1
 - change the output format of the results file to standard csv 
 date : 2026-03-12
+
+v2.1.2
+- put nan as placehold for empty vector entries after filtering, to keep the branch size unchanged and avoid issues in the fit function
+date : 2026-03-23
 
 """
