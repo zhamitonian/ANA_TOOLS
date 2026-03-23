@@ -21,8 +21,8 @@ from .model_parser import ModelParser
 
 """
 generic fit framework
-version : 2.1.5
-Date    : 2026-03-18
+version : 2.1.6
+Date    : 2026-03-23
 Author  : wangzheng
 """
 
@@ -738,22 +738,47 @@ class GenericFit:
         
         # Chi-square/ndf
         if self.result and legend_config.get("show_chi2", True):
-            """Some time this method not sensible 
-            nPars = self.result.floatParsFinal().getSize()
-            chi2_ndf = frame.chiSquare("sum", "data", nPars)
-
-            data_hist = frame.getHist("data")
-            nBins = data_hist.GetN() if data_hist else 0
-            ndf = max(nBins - nPars, 1)
-            chi2_val = chi2_ndf * ndf
-            leg.AddEntry(0, f"#chi^{{2}}/ndf = {chi2_val:.1f}/{ndf}", "")
-            """
-            chi2_var = ROOT.RooChi2Var("chi2", "chi2", self.model, self.dataset)
-            chi2 = chi2_var.getVal()
             n_float = self.result.floatParsFinal().getSize()
-            ndf = self.dataset.numEntries() - n_float  
-            chi2_ndf = chi2 / ndf
-            leg.AddEntry(0, f"#chi^{{2}}/ndf = {chi2:.1f}/{ndf}", "")
+            chi2_val = None
+            ndf = None
+
+            # For unbinned input, build a temporary RooDataHist with user binning.
+            try:
+                var = self.workspace.var(var_name)
+                if var:
+                    var.setBins(int(nbin))
+                    data_for_chi2 = self.dataset
+                    if hasattr(self.dataset, "InheritsFrom") and self.dataset.InheritsFrom("RooDataSet"):
+                        data_for_chi2 = ROOT.RooDataHist(
+                            f"datahist_{var_name}",
+                            f"datahist_{var_name}",
+                            ROOT.RooArgSet(var),
+                            self.dataset,
+                        )
+
+                    chi2_var = ROOT.RooChi2Var(
+                        f"chi2_{var_name}",
+                        f"chi2_{var_name}",
+                        self.model,
+                        data_for_chi2,
+                        rf.DataError(ROOT.RooAbsData.SumW2),
+                    )
+                    chi2_val = float(chi2_var.getVal())
+                    ndf = max(int(nbin) - int(n_float), 1)
+            except Exception:
+                chi2_val = None
+                ndf = None
+
+            # Fallback to frame-based chi2 if RooChi2Var construction fails.
+            """
+            if chi2_val is None or ndf is None:
+                chi2_ndf = frame.chiSquare("sum", "data", n_float)
+                data_hist = frame.getHist("data")
+                n_bins_eff = data_hist.GetN() if data_hist else nbin
+                ndf = max(int(n_bins_eff) - int(n_float), 1)
+                chi2_val = chi2_ndf * ndf
+            """
+            leg.AddEntry(0, f"#chi^{{2}}/ndf = {chi2_val:.1f}/{ndf}", "")
 
         
         # Yield values - only show nsig (signal yield)
@@ -868,6 +893,10 @@ date : 2026-03-16
 v2.1.5
 - fix little bug in chi2 calculation in legend (wrong ndf)
 date : 2026-03-18
+
+v2.1.6
+- fix chi2 calculation 's not compatible with unbinned dataset (RooChi2Var only accepts RooDataHist)
+date : 2026-03-23
 """
 
 
