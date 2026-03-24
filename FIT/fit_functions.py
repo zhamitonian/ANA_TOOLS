@@ -63,8 +63,8 @@ def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Option
 
         # BW 
         which_sig = kwargs.get("which_sig", 0)
-        bw_fix = kwargs.get("bw_fix", True)
-        conv_gauss = kwargs.get("conv_gauss", False)
+        bw_fix = kwargs.get("bw_fix",False)
+        conv_gauss = kwargs.get("conv_gauss", True)
         
         sig_func = ['bw', 'rela_bw', 'double_gauss'][which_sig]
 
@@ -83,6 +83,7 @@ def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Option
 
         if sig_func in ["bw", "rela_bw"] and conv_gauss:
             w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.001, 0.0002, 0.01])")
+            #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.006, 0.002, 0.01])")
             w.factory(f"FCONV::sig_pdf({reso}_M, reso_bw, smear)")
         else:
             print("Skipping convolution for double_gauss signal PDF")
@@ -1152,4 +1153,132 @@ def get_effCurve(h_eff: ROOT.TH1, plot_path: str) -> ROOT.TH1:
     return h_eff_update
 
 
+def fit_rho00(hist: ROOT.TH1, plot_path: str, if_error_band:Optional[bool]=False ,extra_legend:Optional[str]=None) -> tuple:
+    """
+    Fits angular distribution to extract rho00 spin density matrix element.
+    
+    The angular distribution is: dN/d(cos θ) ∝ 1 - rho00 + (3*rho00 - 1)*cos²θ
+    For unpolarized (spin-0), rho00 should equal 1/3.
+    
+    Args:
+        hist: ROOT TH1 histogram containing cos(theta) angular distribution
+        plot_path: File path to save the fit plot
+    
+    Returns:
+        tuple: (rho00_value, rho00_error, chi2, ndf, fit_function)
+    """
+    # Create fit function: [0]*(1-[1]+(3*[1]-1)*x*x)
+    # [0] = normalization factor
+    # [1] = rho00 (physical range: 0 to 1)
+    angular_dist = ROOT.TF1(f"angular_dist", "[0]*(1-[1]+(3*[1]- 1)*x*x)", -1, 1, 2)
+    
+    # Set initial parameter values for better convergence
+    hist_integral = hist.Integral()
+    angular_dist.SetParameter(0, hist_integral / 2.0)  # rough normalization
+    angular_dist.SetParameter(1, 0.33)  # start from unpolarized hypothesis
+    
+    # Set parameter limits
+    angular_dist.SetParLimits(0, 0, hist.GetMaximum() * 2.0)  # allow flexibility
+    angular_dist.SetParLimits(1, 0, 1)  # physical range for rho00
+    
+    # Set parameter names for better output
+    angular_dist.SetParName(0, "N0")
+    angular_dist.SetParName(1, "rho00")
+    
+    # Perform fit with improved options
+    fit_result = hist.Fit(angular_dist, "RSMEQ")
+    
+    # Check fit quality and retry if needed
+    if fit_result.Status() != 0 or not fit_result.IsValid():
+        # Try with different initial value for rho00
+        for init_rho in [0.1, 0.5, 0.7]:
+            angular_dist.SetParameter(1, init_rho)
+            fit_result = hist.Fit(angular_dist, "RSMEQ")
+            if fit_result.Status() == 0 and fit_result.IsValid():
+                break
+    
+    # Extract fit results
+    rho00_value = angular_dist.GetParameter(1)
+    rho00_error = angular_dist.GetParError(1)
+    chi2 = angular_dist.GetChisquare()
+    ndf = angular_dist.GetNDF()
+    
+    # Plot the fit result
+    def plot_fit():
+        # Apply styling
+        ROOT.gStyle.SetOptStat(0)
+        ROOT.gStyle.SetOptFit(0)
+        
+        # Create canvas
+        c = ROOT.TCanvas("c_rho00_fit", "rho00 Fit", 800, 600)
+        c.SetLeftMargin(0.15)
+        c.SetBottomMargin(0.14)
+        c.SetRightMargin(0.05)
+        c.SetTopMargin(0.1)
+        c.SetGridx(True)
+        c.SetGridy(True)
+        
+        # Draw histogram
+        hist.SetMarkerStyle(20)
+        hist.SetMarkerColor(ROOT.kBlack)
+        hist.SetLineColor(ROOT.kBlack)
+        hist.SetTitle("")
+        hist.GetXaxis().SetTitleSize(0.045)
+        hist.GetYaxis().SetTitleSize(0.045)
+        hist.GetXaxis().SetLabelSize(0.04)
+        hist.GetYaxis().SetLabelSize(0.04)
+        
+        max_val = hist.GetMaximum()
+        min_val = hist.GetMinimum()
+        hist.SetMinimum(min_val * 0.5)
+        hist.SetMaximum(max_val * 1.5)
+        #hist.SetMinimum(min_val * 0.9)
+        #hist.SetMaximum(max_val * 1.1)
+        hist.Draw("PE")
+        
+        # Draw fit function
+        angular_dist.SetLineColor(ROOT.kRed)
+        angular_dist.SetLineWidth(3)
+        angular_dist.Draw("SAME")
+        
+        # Create legend
+        leg = ROOT.TLegend(0.6, 0.7, 0.9, 0.90)
+        leg.SetBorderSize(0)
+        leg.SetFillStyle(0)
+        leg.SetFillColor(0)
+        leg.SetTextSize(0.04)
+        leg.AddEntry(0, f"#rho_{{00}} = {rho00_value:.3f} #pm {rho00_error:.3f}", "")
+        leg.AddEntry(0, f"#chi^{{2}}/ndf = {chi2:.1f}/{ndf:.0f} = {chi2/ndf:.1f}", "")
+        
+        if extra_legend is not None:
+            legs = extra_legend.split(";")
+            for entry in legs:
+                leg.AddEntry(0, entry, "")
+        
+        if if_error_band:
+            # Use ROOT's TVirtualFitter to get accurate confidence intervals
+            n_points = 100
+            error_band = ROOT.TGraphErrors(n_points)
+            for i in range(n_points):
+                x = -1.0 + i * 2.0 / (n_points - 1)  # cos(theta) range: -1 to 1
+                error_band.SetPoint(i, x, 0)  # y value will be overwritten by GetConfidenceIntervals
+                
+            # Use ROOT's TVirtualFitter to calculate confidence intervals (1σ)
+            fitter = ROOT.TVirtualFitter.GetFitter()
+            fitter.GetConfidenceIntervals(error_band, 0.683)  # 68.3% confidence level (1σ)
+            
+            error_band.SetFillColor(ROOT.kRed-9)
+            error_band.SetFillStyle(3001)
+            error_band.Draw("3 SAME")
+            
+            # Update legend with error band
+            leg.AddEntry(error_band, "1 #sigma error band", "f")
+        
+        leg.Draw("SAME")
+        
+        c.SaveAs(plot_path)
+    
+    plot_fit()
+    
+    return (rho00_value, rho00_error)
 

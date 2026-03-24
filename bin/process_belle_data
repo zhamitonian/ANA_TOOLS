@@ -74,7 +74,7 @@ class BelleDataProcessor:
         root_file = os.path.join(root_path, f"{job_name}.root")
         log_file = os.path.join(log_path, f"{job_name}.log")
         
-        cmd = f'bsub -q h -oo {log_file} basf2 {script_path} belle1 data "{url}" {root_file}'
+        cmd = f'bsub -q s -oo {log_file} basf2 {script_path} belle1 data "{url}" {root_file}'
         print(f"Submitting: {cmd}")
         subprocess.run(cmd, shell=True, check=True)
     
@@ -118,7 +118,7 @@ class BelleDataProcessor:
             f.write(f'module register fix_mdst {module}\n')
             f.write('path create main\n')
             f.write('path create Analysis\n\n')
-            f.write(f'path add_module main fix_mdst {module}\n\n')
+            f.write(f'path add_module main fix_mdst\n\n')
             f.write('path add_condition main >:0:Analysis\n')
             f.write('path add_condition main =<:0:KILL\n')
             f.write(f'path add_module Analysis {module}\n\n')

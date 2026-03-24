@@ -733,7 +733,8 @@ class RDF_process:
         
         return result_df
 
-    def quick_reweight(self, mc_df: ROOT.RDataFrame, hist_config:Optional[Tuple[str,int,float,float]]=None, data_df:Optional[ROOT.RDataFrame]=None, h_data:Optional[ROOT.TH1]=None, simple_Scale: Optional[bool] = True) -> ROOT.RDataFrame:
+    def quick_reweight(self, mc_df: ROOT.RDataFrame, hist_config:Optional[Tuple[str,int,float,float]]=None, data_df:Optional[ROOT.RDataFrame]=None, 
+                       h_data:Optional[ROOT.TH1]=None, MC_weight:Optional[str] =None,  simple_Scale: Optional[bool] = True) -> ROOT.RDataFrame:
         """
         Reweight MC to match data distribution using a simple bin-by-bin ratio.
         
@@ -747,6 +748,8 @@ class RDF_process:
             Data dataframe for reference distribution 
         h_data : Optional[ROOT.TH1]
             Data histogram (alternative to providing data_df) , the hist's name should be the variable name
+        MC_weight : Optional[str]
+            Optional weight column in MC dataframe to be applied when calculating MC histogram
         simple_Scale: bool
             Whether to normalize histograms before calculating weights
             
@@ -766,9 +769,12 @@ class RDF_process:
         else:
             var, bin, xmin ,xmax = h_data.GetName(), h_data.GetNbinsX(), h_data.GetXaxis().GetXmin(), h_data.GetXaxis().GetXmax()
 
-        h_mc = mc_df.Histo1D((f"h_mc_{var}", f"MC {var}", bin, xmin, xmax), var)
+        if MC_weight is not None:
+            h_mc = mc_df.Histo1D((f"h_mc_{var}", f"MC {var}", bin, xmin, xmax), var, MC_weight)
+        else:
+            h_mc = mc_df.Histo1D((f"h_mc_{var}", f"MC {var}", bin, xmin, xmax), var)
         h_mc_ptr = h_mc.GetPtr()
-        h_data_ptr = h_data.GetPtr()
+        h_data_ptr = h_data
         
         if simple_Scale:
             h_data_ptr.Scale(1.0 / h_data_ptr.Integral())
@@ -787,6 +793,9 @@ class RDF_process:
         func_name = "get_bin_weight"
         if func_name not in RDF_process._defined_functions:
             ROOT.gInterpreter.Declare(f"""
+                #include <vector>
+                #include <ROOT/RVec.hxx>
+
                 double get_bin_weight(double value, double xmin, double xmax, int nbins) {{
                     if (value < xmin || value >= xmax) return 1.0;
                     
@@ -800,6 +809,15 @@ class RDF_process:
                     }}
                     return 1.0;
                 }}
+
+                template <typename T>
+                ROOT::VecOps::RVec<double> get_bin_weight(const ROOT::VecOps::RVec<T>& values, double xmin, double xmax, int nbins) {{
+                    ROOT::VecOps::RVec<double> result;
+                    result.reserve(values.size());
+                    for (const auto& v : values) {{
+                        result.emplace_back(get_bin_weight(static_cast<double>(v), xmin, xmax, nbins));
+                    }}
+                    return result;}}
             """)
             RDF_process._defined_functions.add(func_name)
         
@@ -1006,9 +1024,9 @@ class RDF_process:
     def calculate_pt_toAxis(self, df: ROOT.RDataFrame, particle:Tuple[str, str, str], axis: Tuple[str, str], 
                             particle_name: str, axis_name:str) -> ROOT.RDataFrame:
         """
-        Calculate pt relative to an axis, such as thrust axis.
+        Calculate pt and costheta relative to an axis, such as thrust axis.
         Automatically handles both scalar and vector inputs.
-        Output branch would be: {particle_name}_{axis_name}_pt
+        Output branches: {particle_name}_{axis_name}_pt, {particle_name}_{axis_name}_costheta
 
         Parameters:
         -----------
@@ -1028,16 +1046,19 @@ class RDF_process:
         func_name_scalar = "calculate_pt_toAxis_scalar"
         if func_name_scalar not in RDF_process._defined_functions:
             ROOT.gInterpreter.Declare("""
-                double calculate_pt_toAxis_scalar(
+                #include <tuple>
+                std::tuple<double, double> calculate_pt_toAxis_scalar(
                     double particle_px, double particle_py, double particle_pz,
                     double axis_theta, double axis_phi) 
                 {
                     TVector3 particle_vec(particle_px, particle_py, particle_pz);
                     TVector3 axis_vec;
                     axis_vec.SetMagThetaPhi(1.0, axis_theta, axis_phi);
+                    
                     double pt_toAxis = particle_vec.Perp(axis_vec);
+                    double costheta = particle_vec.Dot(axis_vec) / particle_vec.Mag();
                             
-                    return pt_toAxis;
+                    return std::make_tuple(pt_toAxis, costheta);
                 }
             """)
             RDF_process._defined_functions.add(func_name_scalar)
@@ -1047,9 +1068,10 @@ class RDF_process:
         if func_name_vec not in RDF_process._defined_functions:
             ROOT.gInterpreter.Declare("""
                 #include <ROOT/RVec.hxx>
+                #include <tuple>
                 using namespace ROOT::VecOps;
                 
-                RVec<double> calculate_pt_toAxis_vec(
+                std::tuple<RVec<double>, RVec<double>> calculate_pt_toAxis_vec(
                     const RVec<double>& particle_px, 
                     const RVec<double>& particle_py, 
                     const RVec<double>& particle_pz,
@@ -1059,15 +1081,19 @@ class RDF_process:
                     axis_vec.SetMagThetaPhi(1.0, axis_theta, axis_phi);
                     
                     RVec<double> pt_results;
+                    RVec<double> costheta_results;
                     pt_results.reserve(particle_px.size());
+                    costheta_results.reserve(particle_px.size());
                     
                     for (size_t i = 0; i < particle_px.size(); ++i) {
                         TVector3 particle_vec(particle_px[i], particle_py[i], particle_pz[i]);
                         double pt_toAxis = particle_vec.Perp(axis_vec);
+                        double costheta = particle_vec.Dot(axis_vec) / particle_vec.Mag();
                         pt_results.push_back(pt_toAxis);
+                        costheta_results.push_back(costheta);
                     }
                     
-                    return pt_results;
+                    return std::make_tuple(pt_results, costheta_results);
                 }
             """)
             RDF_process._defined_functions.add(func_name_vec)
@@ -1101,10 +1127,19 @@ class RDF_process:
             """)
             RDF_process._defined_functions.add(func_name_auto)
 
-        # Use the automatic dispatcher
+        # Use the automatic dispatcher to calculate both pt and costheta
         new_df = df.Define(
-            f"{particle_name}_{axis_name}_pt",
+            f"__{particle_name}_{axis_name}_tuple",
             f"calculate_pt_toAxis_auto({particle[0]}, {particle[1]}, {particle[2]}, {axis[0]}, {axis[1]})"
+        )
+        
+        # Extract pt and costheta from the tuple
+        new_df = new_df.Define(
+            f"{particle_name}_{axis_name}_pt",
+            f"std::get<0>(__{particle_name}_{axis_name}_tuple)"
+        ).Define(
+            f"{particle_name}_{axis_name}_costheta",
+            f"std::get<1>(__{particle_name}_{axis_name}_tuple)"
         )
 
         return new_df
@@ -1293,6 +1328,332 @@ class RDF_process:
         return new_df
 
 
+    def convert_spherical_to_cartesian(self, df: ROOT.RDataFrame, 
+                                       particles: List[str], 
+                                       p_branch: str = "p",
+                                       costheta_branch: str = "costheta", 
+                                       phi_branch: str = "phi",
+                                       output_suffix: str = "") -> ROOT.RDataFrame:
+        """
+        Convert particle kinematics from spherical coordinates (p, cosθ, φ) to Cartesian (px, py, pz).
+        Automatically handles both scalar and vector inputs.
+        
+        Formula:
+        - px = p * sin(θ) * cos(φ) = p * sqrt(1 - cos²θ) * cos(φ)
+        - py = p * sin(θ) * sin(φ) = p * sqrt(1 - cos²θ) * sin(φ)
+        - pz = p * cos(θ)
+        
+        Parameters:
+        -----------
+        df : ROOT.RDataFrame
+            Input dataframe
+        particles : List[str]
+            List of particle name prefixes to process (e.g., ["kp", "km"])
+        p_branch : str
+            Suffix for momentum magnitude branch (default: "p")
+        costheta_branch : str
+            Suffix for cos(theta) branch (default: "costheta")
+        phi_branch : str
+            Suffix for phi angle branch (default: "phi")
+        output_suffix : str
+            Optional suffix for output branches (e.g., "_cms", "_lab")
+            Output branches will be: {particle}_px{suffix}, etc.
+            
+        Returns:
+        --------
+        ROOT.RDataFrame: Updated dataframe with Cartesian momentum components
+        
+        Example:
+        --------
+        # For branches: kp_p, kp_costheta, kp_phi
+        df = tools.convert_spherical_to_cartesian(df, ["kp", "km"])
+        # Creates: kp_px, kp_py, kp_pz
+        
+        # For CMS frame with suffix
+        df = tools.convert_spherical_to_cartesian(df, ["kp"], 
+                                                  p_branch="p_cms",
+                                                  costheta_branch="costheta_cms",
+                                                  phi_branch="phi_cms",
+                                                  output_suffix="_cms")
+        # Creates: kp_px_cms, kp_py_cms, kp_pz_cms
+        """
+        new_df = df
+        
+        # Define scalar version
+        func_name_scalar = "spherical_to_cartesian_scalar"
+        if func_name_scalar not in RDF_process._defined_functions:
+            ROOT.gInterpreter.Declare("""
+                #include <cmath>
+                #include <tuple>
+                
+                std::tuple<double, double, double> spherical_to_cartesian_scalar(
+                    double p, double costheta, double phi) 
+                {
+                    double sintheta = std::sqrt(1.0 - costheta * costheta);
+                    double px = p * sintheta * std::cos(phi);
+                    double py = p * sintheta * std::sin(phi);
+                    double pz = p * costheta;
+                    
+                    return std::make_tuple(px, py, pz);
+                }
+            """)
+            RDF_process._defined_functions.add(func_name_scalar)
+        
+        # Define vector version
+        func_name_vec = "spherical_to_cartesian_vec"
+        if func_name_vec not in RDF_process._defined_functions:
+            ROOT.gInterpreter.Declare("""
+                #include <ROOT/RVec.hxx>
+                #include <cmath>
+                #include <tuple>
+                using namespace ROOT::VecOps;
+                
+                std::tuple<RVec<double>, RVec<double>, RVec<double>> 
+                spherical_to_cartesian_vec(
+                    const RVec<double>& p, 
+                    const RVec<double>& costheta, 
+                    const RVec<double>& phi) 
+                {
+                    RVec<double> px, py, pz;
+                    px.reserve(p.size());
+                    py.reserve(p.size());
+                    pz.reserve(p.size());
+                    
+                    for (size_t i = 0; i < p.size(); ++i) {
+                        double sintheta = std::sqrt(1.0 - costheta[i] * costheta[i]);
+                        px.push_back(p[i] * sintheta * std::cos(phi[i]));
+                        py.push_back(p[i] * sintheta * std::sin(phi[i]));
+                        pz.push_back(p[i] * costheta[i]);
+                    }
+                    
+                    return std::make_tuple(px, py, pz);
+                }
+            """)
+            RDF_process._defined_functions.add(func_name_vec)
+        
+        # Define automatic dispatcher
+        func_name_auto = "spherical_to_cartesian_auto"
+        if func_name_auto not in RDF_process._defined_functions:
+            ROOT.gInterpreter.Declare("""
+                #include <ROOT/RVec.hxx>
+                using namespace ROOT::VecOps;
+                
+                // Overload for scalar inputs
+                auto spherical_to_cartesian_auto(
+                    double p, double costheta, double phi) 
+                {
+                    return spherical_to_cartesian_scalar(p, costheta, phi);
+                }
+                
+                // Overload for vector inputs
+                auto spherical_to_cartesian_auto(
+                    const RVec<double>& p, 
+                    const RVec<double>& costheta, 
+                    const RVec<double>& phi) 
+                {
+                    return spherical_to_cartesian_vec(p, costheta, phi);
+                }
+            """)
+            RDF_process._defined_functions.add(func_name_auto)
+        
+        # Apply conversion for each particle
+        for particle in particles:
+            p_name = f"{particle}_{p_branch}"
+            costheta_name = f"{particle}_{costheta_branch}"
+            phi_name = f"{particle}_{phi_branch}"
+            
+            # Define combined result
+            new_df = new_df.Define(
+                f"__cartesian_{particle}__",
+                f"spherical_to_cartesian_auto({p_name}, {costheta_name}, {phi_name})"
+            )
+            
+            # Extract individual components
+            px_name = f"{particle}_px{output_suffix}"
+            py_name = f"{particle}_py{output_suffix}"
+            pz_name = f"{particle}_pz{output_suffix}"
+            
+            if px_name in new_df.GetColumnNames():
+                new_df = new_df.Redefine(px_name, f"std::get<0>(__cartesian_{particle}__)")
+            else:
+                new_df = new_df.Define(px_name, f"std::get<0>(__cartesian_{particle}__)")
+            
+            if py_name in new_df.GetColumnNames():
+                new_df = new_df.Redefine(py_name, f"std::get<1>(__cartesian_{particle}__)")
+            else:
+                new_df = new_df.Define(py_name, f"std::get<1>(__cartesian_{particle}__)")
+            
+            if pz_name in new_df.GetColumnNames():
+                new_df = new_df.Redefine(pz_name, f"std::get<2>(__cartesian_{particle}__)")
+            else:
+                new_df = new_df.Define(pz_name, f"std::get<2>(__cartesian_{particle}__)")
+        
+        return new_df
+
+
+    def convert_cartesian_to_spherical(self, df: ROOT.RDataFrame, 
+                                       particles: List[str],
+                                       px_branch: str = "px",
+                                       py_branch: str = "py",
+                                       pz_branch: str = "pz",
+                                       output_suffix: str = "") -> ROOT.RDataFrame:
+        """
+        Convert particle kinematics from Cartesian coordinates (px, py, pz) to spherical (p, cosθ, φ).
+        Automatically handles both scalar and vector inputs.
+        
+        Formula:
+        - p = sqrt(px² + py² + pz²)
+        - cosθ = pz / p
+        - φ = atan2(py, px)
+        
+        Parameters:
+        -----------
+        df : ROOT.RDataFrame
+            Input dataframe
+        particles : List[str]
+            List of particle name prefixes to process (e.g., ["kp", "km"])
+        px_branch : str
+            Suffix for px branch (default: "px")
+        py_branch : str
+            Suffix for py branch (default: "py")
+        pz_branch : str
+            Suffix for pz branch (default: "pz")
+        output_suffix : str
+            Optional suffix for output branches (e.g., "_cms", "_truth")
+            Output branches will be: {particle}_p{suffix}, {particle}_costheta{suffix}, {particle}_phi{suffix}
+            
+        Returns:
+        --------
+        ROOT.RDataFrame: Updated dataframe with spherical momentum components
+        
+        Example:
+        --------
+        # For branches: kp_px, kp_py, kp_pz
+        df = tools.convert_cartesian_to_spherical(df, ["kp", "km"])
+        # Creates: kp_p, kp_costheta, kp_phi
+        
+        # For CMS frame
+        df = tools.convert_cartesian_to_spherical(df, ["kp"],
+                                                  px_branch="px_cms",
+                                                  py_branch="py_cms", 
+                                                  pz_branch="pz_cms",
+                                                  output_suffix="_cms")
+        # Creates: kp_p_cms, kp_costheta_cms, kp_phi_cms
+        """
+        new_df = df
+        
+        # Define scalar version
+        func_name_scalar = "cartesian_to_spherical_scalar"
+        if func_name_scalar not in RDF_process._defined_functions:
+            ROOT.gInterpreter.Declare("""
+                #include <cmath>
+                #include <tuple>
+                
+                std::tuple<double, double, double> cartesian_to_spherical_scalar(
+                    double px, double py, double pz) 
+                {
+                    double p = std::sqrt(px*px + py*py + pz*pz);
+                    double costheta = (p > 0) ? pz / p : 0.0;
+                    double phi = std::atan2(py, px);
+                    
+                    return std::make_tuple(p, costheta, phi);
+                }
+            """)
+            RDF_process._defined_functions.add(func_name_scalar)
+        
+        # Define vector version
+        func_name_vec = "cartesian_to_spherical_vec"
+        if func_name_vec not in RDF_process._defined_functions:
+            ROOT.gInterpreter.Declare("""
+                #include <ROOT/RVec.hxx>
+                #include <cmath>
+                #include <tuple>
+                using namespace ROOT::VecOps;
+                
+                std::tuple<RVec<double>, RVec<double>, RVec<double>> 
+                cartesian_to_spherical_vec(
+                    const RVec<double>& px, 
+                    const RVec<double>& py, 
+                    const RVec<double>& pz) 
+                {
+                    RVec<double> p, costheta, phi;
+                    p.reserve(px.size());
+                    costheta.reserve(px.size());
+                    phi.reserve(px.size());
+                    
+                    for (size_t i = 0; i < px.size(); ++i) {
+                        double p_val = std::sqrt(px[i]*px[i] + py[i]*py[i] + pz[i]*pz[i]);
+                        double costheta_val = (p_val > 0) ? pz[i] / p_val : 0.0;
+                        double phi_val = std::atan2(py[i], px[i]);
+                        
+                        p.push_back(p_val);
+                        costheta.push_back(costheta_val);
+                        phi.push_back(phi_val);
+                    }
+                    
+                    return std::make_tuple(p, costheta, phi);
+                }
+            """)
+            RDF_process._defined_functions.add(func_name_vec)
+        
+        # Define automatic dispatcher
+        func_name_auto = "cartesian_to_spherical_auto"
+        if func_name_auto not in RDF_process._defined_functions:
+            ROOT.gInterpreter.Declare("""
+                #include <ROOT/RVec.hxx>
+                using namespace ROOT::VecOps;
+                
+                // Overload for scalar inputs
+                auto cartesian_to_spherical_auto(
+                    double px, double py, double pz) 
+                {
+                    return cartesian_to_spherical_scalar(px, py, pz);
+                }
+                
+                // Overload for vector inputs
+                auto cartesian_to_spherical_auto(
+                    const RVec<double>& px, 
+                    const RVec<double>& py, 
+                    const RVec<double>& pz) 
+                {
+                    return cartesian_to_spherical_vec(px, py, pz);
+                }
+            """)
+            RDF_process._defined_functions.add(func_name_auto)
+        
+        # Apply conversion for each particle
+        for particle in particles:
+            px_name = f"{particle}_{px_branch}"
+            py_name = f"{particle}_{py_branch}"
+            pz_name = f"{particle}_{pz_branch}"
+            
+            # Define combined result
+            new_df = new_df.Define(
+                f"__spherical_{particle}__",
+                f"cartesian_to_spherical_auto({px_name}, {py_name}, {pz_name})"
+            )
+            
+            # Extract individual components
+            p_name = f"{particle}_p{output_suffix}"
+            costheta_name = f"{particle}_costheta{output_suffix}"
+            phi_name = f"{particle}_phi{output_suffix}"
+            
+            if p_name in new_df.GetColumnNames():
+                new_df = new_df.Redefine(p_name, f"std::get<0>(__spherical_{particle}__)")
+            else:
+                new_df = new_df.Define(p_name, f"std::get<0>(__spherical_{particle}__)")
+            
+            if costheta_name in new_df.GetColumnNames():
+                new_df = new_df.Redefine(costheta_name, f"std::get<1>(__spherical_{particle}__)")
+            else:
+                new_df = new_df.Define(costheta_name, f"std::get<1>(__spherical_{particle}__)")
+            
+            if phi_name in new_df.GetColumnNames():
+                new_df = new_df.Redefine(phi_name, f"std::get<2>(__spherical_{particle}__)")
+            else:
+                new_df = new_df.Define(phi_name, f"std::get<2>(__spherical_{particle}__)")
+        
+        return new_df
 
 
 

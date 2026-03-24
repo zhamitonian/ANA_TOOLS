@@ -170,7 +170,8 @@ class PhysicsCalculator:
 
     def calculateEfficiency(self, rootFile_config: Dict[str, Tuple[str, str]], 
                     process_func:Optional[callable] = None, 
-                    truth_varDefine:Optional[callable] = None) -> ROOT.TH1F:
+                    truth_varDefine:Optional[callable] = None,
+                    weight = None) -> ROOT.TH1F:
         """
         Calculate and save efficiency histogram from truth and reconstruction histograms
         
@@ -209,7 +210,10 @@ class PhysicsCalculator:
 
         # Create histograms for both entries
         truth_hist = df_truth.Histo1D(self.hist_model, rootFile_config[truth_key][0]).GetValue()
-        reco_hist = df_reco.Histo1D(self.hist_model, rootFile_config[reco_key][0]).GetValue()
+        if weight is not None:
+            reco_hist = df_reco.Histo1D(self.hist_model, rootFile_config[reco_key][0], weight).GetValue()
+        else:
+            reco_hist = df_reco.Histo1D(self.hist_model, rootFile_config[reco_key][0]).GetValue()
 
         for i in range(1, truth_hist.GetNbinsX() + 1):
             if reco_hist.GetBinContent(i) > truth_hist.GetBinContent(i):

@@ -129,7 +129,7 @@ class BelleMCProcessor:
             f.write(f'module register fix_mdst {module}\n')
             f.write('path create main\n')
             f.write('path create Analysis\n\n')
-            f.write(f'path add_module main fix_mdst {module}\n\n')
+            f.write(f'path add_module main fix_mdst\n\n')
             f.write('path add_condition main >:0:Analysis\n')
             f.write('path add_condition main =<:0:KILL\n')
             f.write(f'path add_module Analysis {module}\n\n')
@@ -233,7 +233,7 @@ class BelleMCProcessor:
                         adjusted_stream = stream_no + extra_stream
 
                         belle_level = "caseB" 
-                        if exp == 61 and dataset in ["1S_offres"]:
+                        if exp == 65 and dataset in ["1S_offres"]:
                             belle_level = "b20081107_1418"
                         
                         # Submit jobs in batches
@@ -381,4 +381,8 @@ Date: December 5, 2025
 v2.2
 Date: December 9, 2025
 handle belle_level para for exp11 1S_offres , with dataset b20081107_1418 not caseB
+
+v2.3
+Date: December 10, 2025
+it is exp65 1S_offres should be b20081107_1418 not exp11 , fix this
 """

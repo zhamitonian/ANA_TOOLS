@@ -15,7 +15,7 @@ from .DRAW import style_draw, HistStyle, graph_draw, Brush
 from .STEERING_TOOLS import BelleAnalysisBase, ISRAnalysisTools
 from .OFFLINE_PROCESS import RDF_process, gMC_topoana, find_decay_indices
 from .PHY_CALCULATOR import PhysicsCalculator
-from .FIT import FIT_UTILS, QUICK_FIT, perform_2dfit, perform_resonance_fit, perform_chisq_fit,get_effCurve
+from .FIT import FIT_UTILS, QUICK_FIT, perform_2dfit, perform_resonance_fit, perform_chisq_fit,get_effCurve, fit_rho00
 from .bin.belle_run_manager import BelleRunManager, RunEntry
 
 # Define what gets imported with "from ANA_TOOLS import *"
@@ -29,7 +29,7 @@ __all__ = [
     # Fitting tools
     'FIT_UTILS', 'QUICK_FIT', 
     'perform_2dfit', 'perform_resonance_fit', 'perform_chisq_fit',
-    'get_effCurve',
+    'get_effCurve', 'fit_rho00',
 
     # Offline processing
     'RDF_process', 'gMC_topoana', 'find_decay_indices',

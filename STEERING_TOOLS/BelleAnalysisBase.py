@@ -6,6 +6,11 @@
 # Handles differences between Belle I and Belle II
 ###################################################
 
+## version 2.0.0
+## author: wangz
+## date: 2025-12-16
+
+
 import basf2 as b2
 import modularAnalysis as ma
 import variables.utils as vu
@@ -187,24 +192,28 @@ class BelleAnalysisBase:
             from b2biiConversion import convertBelleMdstToBelleIIMdst
             
             # Use Belle I to Belle II conversion
+            # implementation for reconstruction, if need read generate level distribution, 
+            # set applySkim = False
+            #if self.is_signal_mc:
             convertBelleMdstToBelleIIMdst(
                 input_file, 
                 enableNisKsFinder=False, 
                 enableEvtcls=True, 
-                HadronA=False, 
-                HadronB=False, 
+                HadronA=True, 
+                HadronB=True, 
+                applySkim=True,
                 path=path
             )
-#           convertBelleMdstToBelleIIMdst(
-#               input_file, 
-#               applySkim=False, 
-#               useBelleDBServer=None, 
-#               convertBeamParameters=True,
-#               generatorLevelReconstruction=False, generatorLevelMCMatching=False, entrySequences=None,
-#               matchType2E9oE25Threshold=-1.1, enableNisKsFinder=True, HadronA=True, HadronB=True,
-#               #matchType2E9oE25Threshold=1e10, enableNisKsFinder=True, HadronA=True, HadronB=True,
-#               enableRecTrg=False, enableEvtcls=True, SmearTrack=2, enableLocalDB=True,
-#               path=path)
+#            else:
+#                convertBelleMdstToBelleIIMdst(
+#                    input_file, 
+#                    applySkim=False, 
+#                    useBelleDBServer=None, 
+#                    convertBeamParameters=True,
+#                    generatorLevelReconstruction=False, generatorLevelMCMatching=False, entrySequences=None,
+#                    matchType2E9oE25Threshold=-1.1, enableNisKsFinder=True, HadronA=True, HadronB=True,
+#                    enableRecTrg=False, enableEvtcls=True, SmearTrack=2, enableLocalDB=True,
+#                    path=path)
 #           
             self.has_initialized_conversion = True
             return True

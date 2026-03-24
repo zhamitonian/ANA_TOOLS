@@ -1,10 +1,11 @@
-Metadata-Version: 1.0
+Metadata-Version: 2.4
 Name: ana-tools
 Version: 0.1.0
 Summary: Belle analysis tools
 Home-page: https://github.com/zhamitonian/ANA_TOOLS
 Author: Zheng Wang
 Author-email: wangz731@mail.ustc.edu.cn
-License: UNKNOWN
-Description: UNKNOWN
-Platform: UNKNOWN
+Dynamic: author
+Dynamic: author-email
+Dynamic: home-page
+Dynamic: summary

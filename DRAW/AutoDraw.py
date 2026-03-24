@@ -13,7 +13,7 @@ class HistStyle:
         draw_option: str = "HIST",
         line_color: int = ROOT.kBlack,
         line_style: int = 1,
-        line_width: int = 1,
+        line_width: int = 2,
         fill_style: int = 0,
         marker_style: int = 20,
         marker_size: float = 1.0,
@@ -34,12 +34,12 @@ class HistStyle:
     @staticmethod
     def error_bars(color: int) -> 'HistStyle':
         """Create histogram style with error bars"""
-        return HistStyle("E1", color, 1, 1, 0, 20, 1.0, False, False)
+        return HistStyle("E1", color, 1, 2, 0, 20, 1.0, False, False)
     
     @staticmethod
     def filled_hist(color: int, fill_style: int = 3001, stacked: bool = True) -> 'HistStyle':
         """Create filled histogram style"""
-        return HistStyle("HIST", color, 1, 1, fill_style, 1, 1.0, stacked, True)
+        return HistStyle("HIST", color, 1, 2, fill_style, 1, 1.0, stacked, True)
     
     @staticmethod
     def line_hist(color: int, line_style: int = 1, line_width: int = 2) -> 'HistStyle':
@@ -187,6 +187,7 @@ def style_draw(
     # Ensure we have enough styles for all histograms
     styles = ensure_styles(num, styles)
     
+    area_scale = 1
     # Create canvas
     if pad is not None:
         # Don't call UseCurrentStyle() for pad to preserve user's margin settings
@@ -196,6 +197,18 @@ def style_draw(
         pad.SetTicky(1)
         pad.SetGridx(1)
         pad.SetGridy(1)
+        area_scale = pad.GetWNDC() * pad.GetHNDC() 
+        
+        ROOT.gStyle.SetLabelSize(0.04/area_scale,"xz")
+        ROOT.gStyle.SetLabelSize(0.04/area_scale * 0.75,"y")
+        ROOT.gStyle.SetTitleSize(0.05/area_scale,"xyz")
+        
+        ## previous global size setting not working for error bar hist
+        working_hists[0].GetYaxis().SetLabelSize(0.04/area_scale *0.75)
+        working_hists[0].GetXaxis().SetLabelSize(0.04/area_scale)
+        working_hists[0].GetXaxis().SetTitleSize(0.05/area_scale)
+        working_hists[0].GetYaxis().SetTitleSize(0.05/area_scale)
+        
         pad.cd()
         
         c = pad.GetCanvas()
@@ -230,6 +243,26 @@ def style_draw(
     global_max = -1e9
     st = [None] * num
 
+    # Process axis titles once before loop (for THStack later)
+    y_title = working_hists[0].GetYaxis().GetTitle()
+    x_title = working_hists[0].GetXaxis().GetTitle()
+    y_title_offset = working_hists[0].GetYaxis().GetTitleOffset()#/area_scale
+    x_title_offset = working_hists[0].GetXaxis().GetTitleOffset()#/area_scale
+
+    # if is in [bracket], treat as unit, y title would be Entries/(XX unit)
+    if y_title and y_title[0] == "[" and y_title[-1] == "]":
+        y_unit = y_title[1:-1]
+
+        bin_width = working_hists[0].GetBinWidth(1)
+        if y_unit.strip() == "":
+            y_unit = ""  # keep empty to avoid trailing space
+        if y_unit == "MeV":
+            y_title = f"Events/({bin_width * 1000:.2f} MeV)"
+        elif y_unit:
+            y_title = f"Events/({bin_width:.2f} {y_unit})"
+        else:
+            y_title = f"Events/({bin_width:.2f})"
+
     # Apply styling to all cloned histograms
     for i in range(num):
         h = working_hists[i]
@@ -241,26 +274,6 @@ def style_draw(
         h.SetMarkerStyle(styles[i].marker_style)
         h.SetMarkerSize(styles[i].marker_size)
         h.SetMarkerColor(styles[i].line_color)
-        
-        # Set Y-axis , you could give y axis unit in original title place
-        title = working_hists[0].GetYaxis().GetTitle()
-
-        # if is in [bracket], treat as unit, y title would be Entries/(XX unit)
-        if title and title[0] == "[" and title[-1] == "]":
-            y_unit = title[1:-1]
-
-            bin_width = working_hists[0].GetBinWidth(1)
-            if y_unit.strip() == "":
-                y_unit = ""  # keep empty to avoid trailing space
-            if y_unit == "MeV":
-                title = f"Events/({bin_width * 1000:.2f} MeV)"
-            elif y_unit:
-                title = f"Events/({bin_width:.2f} {y_unit})"
-            else:
-                title = f"Events/({bin_width:.2f})"
-        h.GetYaxis().SetTitle(title)
-        #h.GetYaxis().SetTitleSize(0.05)
-        #h.GetXaxis().SetTitleSize(0.05)
         
         # Apply fill style to all histograms that need it
         if styles[i].stack or styles[i].fill:
@@ -305,32 +318,41 @@ def style_draw(
     
     # Draw the stacks and histograms in the right order
     if has_stack:
-        hs_stacked.Draw("HIST")
-        hs_stacked.GetXaxis().SetTitle(working_hists[0].GetXaxis().GetTitle())
-        hs_stacked.GetYaxis().SetTitle(working_hists[0].GetYaxis().GetTitle())
-        
-        # Apply Y range
+        # Apply Y range before drawing
         hs_stacked.SetMinimum(final_min)
         hs_stacked.SetMaximum(final_max)
+        
+        hs_stacked.Draw("HIST")
+        
+        # Set axis titles AFTER drawing (THStack axes only exist after Draw)
+        hs_stacked.GetXaxis().SetTitle(x_title)
+        hs_stacked.GetYaxis().SetTitle(y_title)
+        hs_stacked.GetXaxis().SetTitleOffset(x_title_offset)
+        hs_stacked.GetYaxis().SetTitleOffset(y_title_offset)
         
         # Draw unstacked histograms if any
         if has_unstacked:
             hs_unstacked.Draw("HIST NOSTACK SAME")
     elif has_unstacked:
-        # Only unstacked histograms
-        hs_unstacked.Draw("HIST NOSTACK")
-        hs_unstacked.GetXaxis().SetTitle(working_hists[0].GetXaxis().GetTitle())
-        hs_unstacked.GetYaxis().SetTitle(working_hists[0].GetYaxis().GetTitle())
-        
-        # Apply Y range
+        # Apply Y range before drawing
         hs_unstacked.SetMinimum(final_min)
         hs_unstacked.SetMaximum(final_max)
+        
+        # Only unstacked histograms
+        hs_unstacked.Draw("HIST NOSTACK")
+        
+        # Set axis titles AFTER drawing (THStack axes only exist after Draw)
+        hs_unstacked.GetXaxis().SetTitle(x_title)
+        hs_unstacked.GetYaxis().SetTitle(y_title)
+        hs_unstacked.GetXaxis().SetTitleOffset(x_title_offset)
+        hs_unstacked.GetYaxis().SetTitleOffset(y_title_offset)
     elif working_hists:
         # If no stacks were used at all, draw first histogram directly
         working_hists[0].Draw(styles[0].get_draw_option())
         
         # Apply Y range
         working_hists[0].GetYaxis().SetRangeUser(final_min, final_max)
+        working_hists[0].GetYaxis().SetTitle(y_title)
     
     # Draw histograms with special drawing options
     for i in range(num):
@@ -359,7 +381,7 @@ def style_draw(
     # Create and configure legend
     num_stats = num if show_stats else 0
 
-    area_scale = 1.5
+    area_scale = 1.25
 
     top = 0.9 - 0.16 * num_stats
     width = 0.2 * sqrt(area_scale)
@@ -497,8 +519,8 @@ def graph_draw(
         graph_list[i].GetYaxis().SetTitle(graph_list[0].GetYaxis().GetTitle())
         graph_list[i].GetXaxis().CenterTitle()
         graph_list[i].GetYaxis().CenterTitle()
-        graph_list[i].GetXaxis().SetTitleOffset(1.2)
-        graph_list[i].GetYaxis().SetTitleOffset(1.2)
+        graph_list[i].GetXaxis().SetTitleOffset(1.0)
+        graph_list[i].GetYaxis().SetTitleOffset(1.0)
         
         graph_list[i].SetMarkerStyle(marker_style[i] if i < len(marker_style) else 20)
         graph_list[i].SetLineWidth(line_width[i] if i < len(line_width) else 1)
