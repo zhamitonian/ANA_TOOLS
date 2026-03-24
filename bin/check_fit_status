@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+"""
+Extract fit status information from all bin log files.
+"""
+
+import os
+import re
+import glob
+import argparse
+from pathlib import Path
+
+def extract_fit_status(log_file):
+    """
+    Extract fit status information from a log file.
+    
+    Returns:
+        dict: Dictionary containing fit status, covariance quality, EDM, and fit OK status
+    """
+    try:
+        with open(log_file, 'r') as f:
+            content = f.read()
+        
+        # Search for the fit status block
+        status_match = re.search(r'Fit status code: (\d+) \(([^)]+)\)', content)
+        cov_match = re.search(r'Covariance quality: (\d+)', content)
+        edm_match = re.search(r'Estimated distance to minimum \(EDM\): ([\d.e+-]+)', content)
+        ok_match = re.search(r'Fit OK\? (True|False)', content)
+        
+        # Extract nsig and nbkg if available
+        nsig_match = re.search(r'nsig: ([\d.]+) ± ([\d.]+)', content)
+        nbkg_match = re.search(r'nbkg: ([\d.]+) ± ([\d.]+)', content)
+        
+        result = {
+            'status_code': int(status_match.group(1)) if status_match else None,
+            'status_desc': status_match.group(2) if status_match else None,
+            'cov_quality': int(cov_match.group(1)) if cov_match else None,
+            'edm': float(edm_match.group(1)) if edm_match else None,
+            'fit_ok': ok_match.group(1) == 'True' if ok_match else None,
+            'nsig': float(nsig_match.group(1)) if nsig_match else None,
+            'nsig_err': float(nsig_match.group(2)) if nsig_match else None,
+            'nbkg': float(nbkg_match.group(1)) if nbkg_match else None,
+            'nbkg_err': float(nbkg_match.group(2)) if nbkg_match else None,
+        }
+        
+        return result
+    
+    except Exception as e:
+        print(f"Error processing {log_file}: {e}")
+        return None
+
+
+def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(
+        description='Extract fit status information from all bin log files.',
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument(
+        'log_dir',
+        nargs='?',
+        default='temp',
+        help='Directory containing log files (default: temp)'
+    )
+    
+    args = parser.parse_args()
+    
+    # Find all log files
+    log_pattern = os.path.join(args.log_dir, "bin_*.log")
+    log_files = sorted(glob.glob(log_pattern))
+    
+    if not log_files:
+        print(f"No log files found in directory: {args.log_dir}")
+        print(f"Search pattern: {log_pattern}")
+        return
+    
+    print(f"Found {len(log_files)} log files\n")
+    
+    # Process all log files
+    results = []
+    for log_file in log_files:
+        # Extract bin number from filename
+        bin_match = re.search(r'bin_(\d+)\.log', log_file)
+        if not bin_match:
+            continue
+        
+        bin_num = int(bin_match.group(1))
+        fit_info = extract_fit_status(log_file)
+        
+        if fit_info:
+            fit_info['bin'] = bin_num
+            fit_info['file'] = log_file
+            results.append(fit_info)
+    
+    # Sort by bin number
+    results.sort(key=lambda x: x['bin'])
+    
+    # Print summary
+    print("="*100)
+    print(f"{'Bin':<6} {'Status':<8} {'CovQual':<9} {'EDM':<12} {'Fit OK':<8} {'Nsig':<12} {'Nbkg':<12}")
+    print("="*100)
+    
+    successful = 0
+    failed = 0
+    
+    for r in results:
+        status_str = f"{r['status_code']}" if r['status_code'] is not None else "N/A"
+        cov_str = f"{r['cov_quality']}" if r['cov_quality'] is not None else "N/A"
+        edm_str = f"{r['edm']:.2e}" if r['edm'] is not None else "N/A"
+        ok_str = "Yes" if r['fit_ok'] else "No"
+        nsig_str = f"{r['nsig']:.1f}" if r['nsig'] is not None else "N/A"
+        nbkg_str = f"{r['nbkg']:.1f}" if r['nbkg'] is not None else "N/A"
+        
+        print(f"{r['bin']:<6} {status_str:<8} {cov_str:<9} {edm_str:<12} {ok_str:<8} {nsig_str:<12} {nbkg_str:<12}")
+        
+        if r['fit_ok']:
+            successful += 1
+        else:
+            failed += 1
+    
+    print("="*100)
+    print(f"\nSummary: {successful} successful fits, {failed} failed fits out of {len(results)} total bins")
+    
+    # List failed bins
+    failed_bins = [r['bin'] for r in results if not r['fit_ok']]
+    if failed_bins:
+        print(f"\nFailed bins: {failed_bins}")
+    
+    # Check for bad covariance quality (< 2)
+    bad_cov_bins = [r['bin'] for r in results if r['cov_quality'] is not None and r['cov_quality'] < 2]
+    if bad_cov_bins:
+        print(f"\nBins with poor covariance quality (< 2): {bad_cov_bins}")
+    
+    # Check for high EDM (> 0.001)
+    high_edm_bins = [r['bin'] for r in results if r['edm'] is not None and r['edm'] > 0.001]
+    if high_edm_bins:
+        print(f"\nBins with high EDM (> 0.001): {high_edm_bins}")
+
+
+if __name__ == "__main__":
+    main()

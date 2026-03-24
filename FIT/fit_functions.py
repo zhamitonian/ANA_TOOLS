@@ -8,7 +8,7 @@ import os
 import time
 import math
 from contextlib import contextmanager
-from typing import Optional
+from typing import Optional, Union
 from array import array
 from DRAW import style_draw
 from PHY_CALCULATOR import PhysicsCalculator
@@ -16,33 +16,35 @@ from .fit_tools import FIT_UTILS, QUICK_FIT
 
 from math import sqrt
 
-def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str]=None, bin_fit_range:Optional[str]=None, joint_fit:bool=False, **kwargs):
+def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Optional[str]=None, bin_fit_range:Optional[str]=None, binned_fit = False,joint_fit:bool=False, **kwargs):
     """
-    Perform sPlot analysis for digamma to diphi process
-    
     Args:
-        tree: Input ROOT TTree with the data
+        input_tree: Input ROOT TTree with the data
         output_dir: Output directory for plots and results
         log_file: Optional file to save logs (stdout and stderr)
         bin_fit_range: Optional string representing the bin range for fitting
+        binned_fit: Whether to perform binned fit or unbinned fit
         **kwargs: Additional keyword arguments:
             branches_name: List of branch names to combine (e.g., ["phi1_M", "phi2_M"])
+            particle_config: Tuple containing (reso, mass, width) (default: ("phi", 1.0195, 0.004249))
+            fit_config: Tuple containing (x_min, x_max, nbin) (default: (1, 1.06, 60))
+            if_save: Wheter to save coordinate root file used to make dataset
     """
-    reso, mass, width = "phi", 1.0195, 0.004249
-    x_min, x_max, nbin = 1, 1.06, 60
-    #x_min, x_max, nbin = 0.985, 1.055, 70 # for argus , kk threshold 0.98736
+    #reso, mass, width = "phi", 1.0195, 0.004249
+    reso, mass, width = kwargs.get("particle_config", ("phi", 1.0195, 0.004249))
+    x_min, x_max, nbin = kwargs.get("fit_config", (1, 1.06, 60))
+    #x_min, x_max, nbin = 0.99, 1.15, 100 # ralf siedl  
+    #x_min, x_max, nbin = 1, 1.06, 60
 
-    var_config = [("phi_M", x_min, x_max)]  
+    var_config = [(f"{reso}_M", x_min, x_max)]  
     tools = FIT_UTILS(log_file=log_file, var_config= var_config)
 
-    #print(kwargs)
-    branches_name = kwargs['branches_name']
-    #print(f"Branch names {branches_name}")
-
+    branches_name = kwargs.get('branches_name', None)
+    print(f"binned_fit: { binned_fit}")
     # redirect log
     with tools.redirect_output():
         # Add some useful information at the beginning of the log
-        print(f"=== Starting sPlot Analysis ===")
+        print(f"=== Starting Fitting ===")
         print(f"Output file: {output_dir}")
         if branches_name is not None:
             print(f"Branch names to combine: {branches_name}")
@@ -50,24 +52,72 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
         print(f"===============================")
         
         w = ROOT.RooWorkspace("w", "workspace")
+        # Enforce deterministic behavior: disable implicit MT 
+        #ROOT.DisableImplicitMT()
         
-        dataset = tools.handle_dataset(tree, w, branches_name, True if bin_fit_range is None else False)
+        if_save = kwargs.get("if_save", False)
+        dataset = tools.handle_dataset(input_tree, w, branches_name, binned_fit, nbin, save_rootFile= if_save)
+
         # Save dataset to workspace
         w.Import(dataset, ROOT.RooFit.Rename("dataset"))
 
-        print(tree.GetEntries())
-        print(f"Dataset created with {dataset.numEntries()} entries")
+        # BW 
+        which_sig = kwargs.get("which_sig", 0)
+        bw_fix = kwargs.get("bw_fix",False)
+        conv_gauss = kwargs.get("conv_gauss", True)
         
-        # Use Breit-Wigner (RooBreitWigner) with PDG values for phi meson
-        w.factory(f"BreitWigner::reso_bw({reso}_M, {mass}, {width})")
-        #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.0008, 0.0002, 0.0014])")
-        w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.00083])")
-        w.factory(f"FCONV::sig_pdf({reso}_M, reso_bw, smear)")
+        sig_func = ['bw', 'rela_bw', 'double_gauss'][which_sig]
+
+        if sig_func == "double_gauss":
+            w.factory(f"Gaussian::gauss1_{reso}({reso}_M, mean1_{reso}[{mass}, {mass - 0.01}, {mass + 0.01}], sigma1_{reso}[0.002, 0.0001, 0.01])")
+            w.factory(f"Gaussian::gauss2_{reso}({reso}_M, mean1_{reso}, sigma2_{reso}[0.01, 0.0001, 0.1])")  
+            w.factory(f"SUM::sig_pdf(frac_{reso}[0.5, 0, 1] * gauss1_{reso}, gauss2_{reso})")  
+            #w.factory(f"Gaussian::sig_pdf({reso}_M, mean1_{reso}[{mass}, {mass - 0.01}, {mass + 0.01}], sigma1_{reso}[0.002, 0.0001, 0.01])")
+        elif sig_func == "bw":
+            if bw_fix:
+                w.factory(f"BreitWigner::reso_bw({reso}_M, {mass}, {width})")
+            else:
+                w.factory(f"BreitWigner::reso_bw({reso}_M, mass[{mass}, {mass - 0.01}, {mass + 0.01}], width[{width}, {width*0.5}, {width*1.5}])")
+        elif sig_func == "rela_bw":
+            pass # to be implemented later
+
+        if sig_func in ["bw", "rela_bw"] and conv_gauss:
+            w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.001, 0.0002, 0.01])")
+            #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.006, 0.002, 0.01])")
+            w.factory(f"FCONV::sig_pdf({reso}_M, reso_bw, smear)")
+        else:
+            print("Skipping convolution for double_gauss signal PDF")
+            if w.pdf("reso_bw"):
+                w.Import(w.pdf("reso_bw"), ROOT.RooFit.Rename("sig_pdf"))
+            else:
+                print("Warning: reso_bw PDF not found in workspace, cannot import as sig_pdf.")
+
+        #w.factory(f"BreitWigner::reso_bw({reso}_M, mass[{mass}, {mass - 100*width}, {mass + 100*mass}], {width})")
+        #w.factory(f"BreitWigner::sig_pdf({reso}_M, {mass}, {width})")
+        #w.factory(f"BreitWigner::reso_bw({reso}_M, mass[{mass}, 1.01, 1.03], width[{width}, 0.001, 0.01])")
+        #w.factory(f"BreitWigner::sig_pdf({reso}_M, mass[{mass}, 1.01, 1.03], width[{width}, 0.001, 0.01])")
+
+        # rela BW
+        #formula = f"({mass} * {width}) / (pow({reso}_M*{reso}_M - {mass}*{mass}, 2) + pow({mass}*{width}, 2))"
+        #w.factory(f"RooGenericPdf::reso_bw('{formula}', {{{reso}_M}})")
+
+        #from .relativistic_breit_wigner import define_relativistic_breit_wigner
+        #define_relativistic_breit_wigner(w, reso, mass, width)
+
+        #from .__helper_functions import define_relativistic_breit_wigner
+        #define_relativistic_breit_wigner(w, reso, mass, width)
+
+        #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0, -0.0001, 0.0001], smear_sigma[0.0008, 0.0002, 0.0014])")
+        #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.00083, 0.0002, 0.0014])")
+        #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.00083])")
+        #w.factory(f"Gaussian::smear({reso}_M, smear_mean[0], smear_sigma[0.0002, 0.001, 0.008])") # for jpsi fitting
+        # Fix cache binning for FFT convolution to avoid run-to-run variation
+        #w.factory(f"FCONV::sig_pdf({reso}_M, reso_bw, smear)")
         
         # Polynomial, Chebychev, ArgusBG, or reversed Argus background PDF selection
-        which_bkg = kwargs.get("which_bkg", 1)  # 0: Chebychev, 1: Polynomial, 2: ArgusBG, 3: reversed Argus
-        bkg_order = kwargs.get("bkg_order", 0)  # Order of polynomial/Chebychev (default: 1)
-        bkg_funcs = ["Chebychev", "Polynomial", "ArgusBG", "revArgus"]
+        which_bkg = kwargs.get("which_bkg", 1)  # 0: Chebychev, 1: Polynomial, 2: ArgusBG, 3: reversed Argus 
+        bkg_order = kwargs.get("bkg_order", 1)  # Order of polynomial/Chebychev (default: 1)
+        bkg_funcs = ["Chebychev", "Polynomial", "ArgusBG", "revArgus", "custom", "custom2"]
         bkg_func = bkg_funcs[which_bkg]
 
         if bkg_func in ["Chebychev", "Polynomial"]:
@@ -84,8 +134,25 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
             w.factory("rev_c[-20, -100, -0.01]")
             w.factory("rev_p[0.5, 0, 1]")
             w.factory(f"RooGenericPdf::bkg_pdf('{argus_formula}', {{{reso}_M, rev_m0, rev_c, rev_p}})")
+        elif bkg_func == "custom":
+            formula = f"a*pow({reso}_M - m0, b)* exp(c * ({reso}_M - m0))"
+            #w.factory(f"m0[{x_min}]")
+            w.factory(f"m0[{x_min}]")
+            w.factory("a[1, -10000, 100000]")
+            w.factory("b[0.5, -10, 10]")
+            w.factory("c[-1, -100, 100]")
+            w.factory(f"RooGenericPdf::bkg_pdf('{formula}', {{{reso}_M, m0, a, b, c}})")
+        elif bkg_func == "custom2":
+            formula = f"pow(a + b*({reso}_M - m0), c + d*({reso}_M - m0))"
+            w.factory(f"m0[{x_min}]")
+            w.factory("a[1, -10000, 100000]")
+            w.factory("b[0.5, -10, 10]")
+            w.factory("c[1, -100, 100]")
+            w.factory("d[0.1, -10, 10]")
+            w.factory(f"RooGenericPdf::bkg_pdf('{formula}', {{{reso}_M, m0, a, b, c, d}})")
 
-        w.factory("SUM::model(nsig[20000, 0, 40000] * sig_pdf, nbkg[45000, 0, 200000] * bkg_pdf)")
+        #w.factory("SUM::model(nsig[20000, 0, 2000000] * sig_pdf, nbkg[45000, 0, 2000000] * bkg_pdf)")
+        w.factory("SUM::model(nsig[20000, 0, 200000000] * sig_pdf, nbkg[45000, 0, 2000000] * bkg_pdf)")
 
         # Perform fit
         model = w.pdf("model")
@@ -104,17 +171,39 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
         
         if joint_fit:
             return w 
+        ROOT.Math.MinimizerOptions.SetDefaultMaxFunctionCalls(500000)
 
+        print("Default minimizer:", ROOT.Math.MinimizerOptions.DefaultMinimizerType())
+        print("Default algorithm:", ROOT.Math.MinimizerOptions.DefaultMinimizerAlgo())
+        print("Default strategy:", ROOT.Math.MinimizerOptions.DefaultStrategy())
+        print("Default max calls:", ROOT.Math.MinimizerOptions.DefaultMaxFunctionCalls())
+        
         result = model.fitTo(dataset, 
-                             rf.Save(True), 
-                             rf.NumCPU(4), 
-                             rf.PrintLevel(0),
-                             rf.Strategy(1))
-                             #rf.Minimizer("Minuit2"))
+                     rf.Save(True),
+                     rf.NumCPU(4),
+                     rf.Strategy(2),
+                     rf.Minimizer("Minuit2", "Migrad"),
+                     rf.PrintLevel(3))
 
+        status_codes = {
+            0: "successful fit",
+            1: "covariance was made positive definite",
+            2: "Hesse is invalid",
+            3: "EDM is above max",
+            4: "Reached call limit",
+            5: "other failure"
+        }
+        print("*" * 30)
+        print(f"Fit status code: {result.status()} ({status_codes.get(result.status(), 'unknown status code')})")
+        print("Covariance quality:", result.covQual())
+        print("Estimated distance to minimum (EDM):", result.edm())
+        ok = (result.status() == 0) and (result.covQual() >= 2) and (result.edm() < 1e-3)
+        print("fit ok?", ok)
+        print("*" * 30)
 
         # --------------------------------------- splot ---------------------------------------
-        if bin_fit_range is None:
+        # sPlot only for unbinned fits
+        if not binned_fit:
             # Create sPlot for visualization using phi_M  as discriminating variables
             sData = RooStats.SPlot("sData", "sPlot", dataset, model,
                                 ROOT.RooArgList(w.var("nsig"), w.var("nbkg")))
@@ -175,6 +264,7 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
             pad1.Draw()
 
             framex = w.var(var_name).frame()
+            #framex.GetXaxis().SetRangeUser(0.986, 1.06)
             dataset.plotOn(framex, rf.Name("data"), rf.MarkerColor(ROOT.kBlack), rf.MarkerStyle(20), rf.Binning(nbin))
             model.plotOn(framex, rf.Name("sum"), rf.LineColor(4))
             model.plotOn(framex, rf.Components("sig_pdf"), rf.Name("signal"), rf.LineColor(2), rf.LineStyle(4), rf.LineWidth(3))
@@ -191,7 +281,13 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
             
             framex.Draw()
 
-            leg = ROOT.TLegend(0.75, 0.9 - 0.05*5, 0.95, 0.9)
+            leg_ysize = 7
+            if bin_fit_range:
+                ranges = bin_fit_range.split(';')
+                leg_ysize += len(ranges)
+
+            #leg = ROOT.TLegend(0.75, 0.9 - 0.05*5, 0.95, 0.9)
+            leg = ROOT.TLegend(0.7, 0.9 - 0.05*leg_ysize, 0.95, 0.9)
             leg.SetBorderSize(0)
             leg.SetFillStyle(0)
             leg.SetFillColor(0)
@@ -231,27 +327,28 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
             # Calculate chi-square
             chi2_val = chi2 * ndf
             
-            unbinned = kwargs.get('unbinned', True)
-            if unbinned:
-                # 对于unbinned拟合，显示NLL值
-                nll = result.minNll()
-                leg.AddEntry(0, f"NLL = {nll:.1f}", "")
+            # Show appropriate goodness-of-fit measure
+            if binned_fit:
+                # For binned fit, show chi2/ndf
+                leg.AddEntry(0, "#chi^{2}/ndf = " + f"{chi2_val:.1f}/{ndf}", "")
             else:
-                # 对于binned拟合，保留原有的χ²/ndof显示
-                chi2 = framex.chiSquare("sum", "data")  # Get reduced chi-square
-                data_hist = framex.getHist("data")
-                nBins = data_hist.GetN()
-                nPars = result.floatParsFinal().getSize()
-                ndf = nBins - nPars
+                # For unbinned fit, show both (chi2 is less meaningful but still shown)
                 chi2_val = chi2 * ndf
                 leg.AddEntry(0, "#chi^{2}/ndf = " + f"{chi2_val:.1f}/{ndf}", "")
+                # Could also show NLL for unbinned:
+                # nll = result.minNll()
+                # leg.AddEntry(0, f"NLL = {nll:.1f}", "")
 
-            leg.AddEntry(0, "N_{sig}=" + f"{w.var('nsig').getVal():.1f} #pm {w.var('nsig').getError():.1f}", "")
+            leg.AddEntry(0, "N_{sig} = " + f"{w.var('nsig').getVal():.1f} #pm {w.var('nsig').getError():.1f}", "")
             #leg.AddEntry(0, "#sigma_{gauss} = " + f"{w.var('smear_sigma').getVal():.2e} #pm {w.var('smear_sigma').getError():.2e}", "")
-            leg.AddEntry(0, "#sigma_{gauss} = " + f"{(w.var('smear_sigma').getVal()*1000):.2f} #pm {(w.var('smear_sigma').getError()*1000):.2f} MeV", "")
+            if conv_gauss:
+                leg.AddEntry(0, "#sigma_{gauss} = " + f"{(w.var('smear_sigma').getVal()*1000):.2f} #pm {(w.var('smear_sigma').getError()*1000):.2f} MeV", "")
 
             if bin_fit_range:
-                leg.AddEntry(0, f"Bin: {bin_fit_range}", "")
+                # Add each dimension on a separate line
+                for range_str in ranges:
+                    range_str = range_str.strip()
+                    leg.AddEntry(0, f"{range_str}", "")
             leg.Draw()
 
             pad2 = canvas.cd(2)
@@ -271,11 +368,18 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
             framex_pull.GetYaxis().SetRangeUser(-5, 5)
             framex_pull.GetYaxis().SetLabelSize(0.1)
             framex_pull.GetXaxis().SetLabelSize(0.13)
-            x_title = "M_{K^{+}K^{-}} (GeV/c^{2})" if var_name == "phi_M" else "M_{reso}"
+            name_dict = {"phi_M":"M_{K^{+}K^{-}}", "jpsi_M":"M_{#phi K^{+}K^{-}}", 
+                         "Ks_M":"M_{#pi^{+}#pi^{-}}"}
+
+            if var_name in name_dict.keys():
+                x_title = name_dict[var_name] + " (GeV/c^{2})"
+            else:
+                x_title = var_name + " (GeV/c^{2})"
             framex_pull.GetXaxis().SetTitle(x_title)
             framex_pull.GetXaxis().CenterTitle()
             framex_pull.GetXaxis().SetTitleSize(0.12)
             framex_pull.GetXaxis().SetTitleOffset(1.1)
+            #framex_pull.GetXaxis().SetRangeUser(0.986, 1.06)
 
             pullhist = framex.pullHist("data", "sum")
             framex_pull.addObject(pullhist, "P")
@@ -284,13 +388,13 @@ def perform_resonance_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str
 
         plot(f"{reso}_M")
 
-
         #return w, result, sData
         nsig = w.var("nsig").getVal()
         nsig_err = w.var("nsig").getError()
                 
         # Add summary at the end of the log
         print(f"=== Analysis Complete ===")
+        print(f"Fit type: {'Binned (histogram)' if binned_fit else 'Unbinned (tree)'}")
         print(f"Signal yield: {nsig:.2f} ± {nsig_err:.2f}")
         print(f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"========================")
@@ -412,7 +516,7 @@ def perform_2dfit(tree:ROOT.TTree, output_dir:dir, log_file = None, bin_fit_rang
         
         result = model.fitTo(dataset, 
                              rf.Save(True), 
-                             rf.NumCPU(4), 
+                             rf.NumCPU(1), 
                              rf.PrintLevel(0),
                              rf.Strategy(1))
                              #rf.Minimizer("Minuit2"))
@@ -970,7 +1074,7 @@ def get_effCurve(h_eff: ROOT.TH1, plot_path: str) -> ROOT.TH1:
     """
     h_eff_update = h_eff.Clone("h_eff_fit")
     # Create a polynomial fit function (5th order polynomial)
-    fit_func = ROOT.TF1("eff_fit_func", "pol5", h_eff.GetXaxis().GetXmin(), h_eff.GetXaxis().GetXmax())
+    fit_func = ROOT.TF1("eff_fit_func", "pol3", h_eff.GetXaxis().GetXmin(), h_eff.GetXaxis().GetXmax())
     
     # Fit the histogram
     fit_result = h_eff.Fit(fit_func, "SQR")  # S to return fit result, Q for quiet, R for range
@@ -1049,4 +1153,132 @@ def get_effCurve(h_eff: ROOT.TH1, plot_path: str) -> ROOT.TH1:
     return h_eff_update
 
 
+def fit_rho00(hist: ROOT.TH1, plot_path: str, if_error_band:Optional[bool]=False ,extra_legend:Optional[str]=None) -> tuple:
+    """
+    Fits angular distribution to extract rho00 spin density matrix element.
+    
+    The angular distribution is: dN/d(cos θ) ∝ 1 - rho00 + (3*rho00 - 1)*cos²θ
+    For unpolarized (spin-0), rho00 should equal 1/3.
+    
+    Args:
+        hist: ROOT TH1 histogram containing cos(theta) angular distribution
+        plot_path: File path to save the fit plot
+    
+    Returns:
+        tuple: (rho00_value, rho00_error, chi2, ndf, fit_function)
+    """
+    # Create fit function: [0]*(1-[1]+(3*[1]-1)*x*x)
+    # [0] = normalization factor
+    # [1] = rho00 (physical range: 0 to 1)
+    angular_dist = ROOT.TF1(f"angular_dist", "[0]*(1-[1]+(3*[1]- 1)*x*x)", -1, 1, 2)
+    
+    # Set initial parameter values for better convergence
+    hist_integral = hist.Integral()
+    angular_dist.SetParameter(0, hist_integral / 2.0)  # rough normalization
+    angular_dist.SetParameter(1, 0.33)  # start from unpolarized hypothesis
+    
+    # Set parameter limits
+    angular_dist.SetParLimits(0, 0, hist.GetMaximum() * 2.0)  # allow flexibility
+    angular_dist.SetParLimits(1, 0, 1)  # physical range for rho00
+    
+    # Set parameter names for better output
+    angular_dist.SetParName(0, "N0")
+    angular_dist.SetParName(1, "rho00")
+    
+    # Perform fit with improved options
+    fit_result = hist.Fit(angular_dist, "RSMEQ")
+    
+    # Check fit quality and retry if needed
+    if fit_result.Status() != 0 or not fit_result.IsValid():
+        # Try with different initial value for rho00
+        for init_rho in [0.1, 0.5, 0.7]:
+            angular_dist.SetParameter(1, init_rho)
+            fit_result = hist.Fit(angular_dist, "RSMEQ")
+            if fit_result.Status() == 0 and fit_result.IsValid():
+                break
+    
+    # Extract fit results
+    rho00_value = angular_dist.GetParameter(1)
+    rho00_error = angular_dist.GetParError(1)
+    chi2 = angular_dist.GetChisquare()
+    ndf = angular_dist.GetNDF()
+    
+    # Plot the fit result
+    def plot_fit():
+        # Apply styling
+        ROOT.gStyle.SetOptStat(0)
+        ROOT.gStyle.SetOptFit(0)
+        
+        # Create canvas
+        c = ROOT.TCanvas("c_rho00_fit", "rho00 Fit", 800, 600)
+        c.SetLeftMargin(0.15)
+        c.SetBottomMargin(0.14)
+        c.SetRightMargin(0.05)
+        c.SetTopMargin(0.1)
+        c.SetGridx(True)
+        c.SetGridy(True)
+        
+        # Draw histogram
+        hist.SetMarkerStyle(20)
+        hist.SetMarkerColor(ROOT.kBlack)
+        hist.SetLineColor(ROOT.kBlack)
+        hist.SetTitle("")
+        hist.GetXaxis().SetTitleSize(0.045)
+        hist.GetYaxis().SetTitleSize(0.045)
+        hist.GetXaxis().SetLabelSize(0.04)
+        hist.GetYaxis().SetLabelSize(0.04)
+        
+        max_val = hist.GetMaximum()
+        min_val = hist.GetMinimum()
+        hist.SetMinimum(min_val * 0.5)
+        hist.SetMaximum(max_val * 1.5)
+        #hist.SetMinimum(min_val * 0.9)
+        #hist.SetMaximum(max_val * 1.1)
+        hist.Draw("PE")
+        
+        # Draw fit function
+        angular_dist.SetLineColor(ROOT.kRed)
+        angular_dist.SetLineWidth(3)
+        angular_dist.Draw("SAME")
+        
+        # Create legend
+        leg = ROOT.TLegend(0.6, 0.7, 0.9, 0.90)
+        leg.SetBorderSize(0)
+        leg.SetFillStyle(0)
+        leg.SetFillColor(0)
+        leg.SetTextSize(0.04)
+        leg.AddEntry(0, f"#rho_{{00}} = {rho00_value:.3f} #pm {rho00_error:.3f}", "")
+        leg.AddEntry(0, f"#chi^{{2}}/ndf = {chi2:.1f}/{ndf:.0f} = {chi2/ndf:.1f}", "")
+        
+        if extra_legend is not None:
+            legs = extra_legend.split(";")
+            for entry in legs:
+                leg.AddEntry(0, entry, "")
+        
+        if if_error_band:
+            # Use ROOT's TVirtualFitter to get accurate confidence intervals
+            n_points = 100
+            error_band = ROOT.TGraphErrors(n_points)
+            for i in range(n_points):
+                x = -1.0 + i * 2.0 / (n_points - 1)  # cos(theta) range: -1 to 1
+                error_band.SetPoint(i, x, 0)  # y value will be overwritten by GetConfidenceIntervals
+                
+            # Use ROOT's TVirtualFitter to calculate confidence intervals (1σ)
+            fitter = ROOT.TVirtualFitter.GetFitter()
+            fitter.GetConfidenceIntervals(error_band, 0.683)  # 68.3% confidence level (1σ)
+            
+            error_band.SetFillColor(ROOT.kRed-9)
+            error_band.SetFillStyle(3001)
+            error_band.Draw("3 SAME")
+            
+            # Update legend with error band
+            leg.AddEntry(error_band, "1 #sigma error band", "f")
+        
+        leg.Draw("SAME")
+        
+        c.SaveAs(plot_path)
+    
+    plot_fit()
+    
+    return (rho00_value, rho00_error)
 

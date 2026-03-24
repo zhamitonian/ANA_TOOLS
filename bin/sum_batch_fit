@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+
+import os
+import re
+from pathlib import Path
+import argparse
+
+def extract_hesse_block(log_content):
+    """精确提取HESSE结果块"""
+    lines = log_content.split('\n')
+    hesse_start = -1
+    hesse_end = -1
+    
+    for i, line in enumerate(lines):
+        if 'FCN=' in line and 'FROM HESSE' in line:
+            hesse_start = i
+        elif hesse_start != -1 and 'ERR DEF=' in line:
+            hesse_end = i + 1
+            break
+    
+    if hesse_start != -1 and hesse_end != -1:
+        return '\n'.join(lines[hesse_start:hesse_end])
+    
+    return None
+
+def create_slides_format(results):
+    """创建适合slides的格式"""
+    slides_content = []
+    
+    for filename, result in results.items():
+        # 提取关键参数值
+        lines = result.split('\n')
+        param_info = []
+        
+        for line in lines:
+            if re.match(r'\s*\d+\s+\w+', line):
+                parts = line.split()
+                if len(parts) >= 4:
+                    param_name = parts[1]
+                    value = parts[2]
+                    error = parts[3]
+                    param_info.append(f"{param_name}: {value} ± {error}")
+        
+        slide_text = f"""
+## {filename}
+
+**Fit Results:**
+```
+{result.split('EXT PARAMETER')[0].strip()}
+```
+
+**Parameters:**
+{chr(10).join(['- ' + info for info in param_info])}
+"""
+        slides_content.append(slide_text)
+    
+    return '\n'.join(slides_content)
+
+def natural_sort_key(filename):
+    """自然排序的键函数，正确处理数字"""
+    # 提取文件名中的数字部分进行排序
+    parts = []
+    for part in re.split(r'(\d+)', filename):
+        if part.isdigit():
+            parts.append(int(part))
+        else:
+            parts.append(part)
+    return parts
+
+# 主执行函数
+def main():
+    parser = argparse.ArgumentParser(description="Extract HESSE results from log files.")
+    parser.add_argument("directory_path", help="Path to the directory containing log files")
+    args = parser.parse_args()
+    directory_path = args.directory_path
+    
+    # 批量提取
+    log_files = list(Path(directory_path).glob('*.log'))
+    # 按文件名自然排序
+    log_files.sort(key=lambda x: natural_sort_key(x.stem))
+    
+    results = {}
+    for log_file in log_files:
+        with open(log_file, 'r') as f:
+            content = f.read()
+        
+        hesse_result = extract_hesse_block(content)
+        if hesse_result:
+            results[log_file.stem] = hesse_result
+    
+    # 保存原始结果（保持排序顺序）
+    with open('hesse_raw_results.txt', 'w') as f:
+        for log_file in log_files:
+            filename = log_file.stem
+            if filename in results:
+                f.write(f"\n{'='*60}\n{filename}\n{'='*60}\n")
+                f.write(results[filename] + '\n')
+    
+    # 保存slides格式（保持排序顺序）
+    slides_content = []
+    for log_file in log_files:
+        filename = log_file.stem
+        if filename in results:
+            result = results[filename]
+            # 提取关键参数值
+            lines = result.split('\n')
+            param_info = []
+            
+            for line in lines:
+                if re.match(r'\s*\d+\s+\w+', line):
+                    parts = line.split()
+                    if len(parts) >= 4:
+                        param_name = parts[1]
+                        value = parts[2]
+                        error = parts[3]
+                        param_info.append(f"{param_name}: {value} ± {error}")
+            
+            slide_text = f"""
+## {filename}
+
+**Fit Results:**
+```
+{result.split('EXT PARAMETER')[0].strip()}
+```
+
+**Parameters:**
+{chr(10).join(['- ' + info for info in param_info])}
+"""
+            slides_content.append(slide_text)
+    
+    with open('hesse_slides.md', 'w') as f:
+        f.write("# HESSE Fitting Results\n")
+        f.write('\n'.join(slides_content))
+    
+    print(f"Processed {len(results)} files")
+    print("Files processed in order:")
+    for log_file in log_files:
+        if log_file.stem in results:
+            print(f"  - {log_file.name}")
+    print("\nResults saved to:")
+    print("- hesse_raw_results.txt (原始格式)")
+    print("- hesse_slides.md (slides格式)")
+
+if __name__ == "__main__":
+    main()

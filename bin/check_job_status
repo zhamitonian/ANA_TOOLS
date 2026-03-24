@@ -1,0 +1,536 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os
+import glob
+import argparse
+from collections import defaultdict
+import re
+
+def parse_log_file(log_file_path):
+    """
+    解析单个日志文件，提取作业状态信息
+    """
+    try:
+        with open(log_file_path, 'r', encoding='utf-8', errors='ignore') as f:
+            content = f.read()
+        
+        # 提取基本信息
+        job_info = {
+            'file': os.path.basename(log_file_path),
+            'path': log_file_path,
+            'status': 'Unknown',
+            'job_id': None,
+            'exp': None,
+            'run_range': None,
+            'skim_type': None,
+            'data_type': None,
+            'exit_code': None,
+            'error_message': None,
+            'submit_command': None,  # 新增：提交命令
+            'bsub_command': None,    # 新增：完整的bsub命令
+            'run_start': None,       # 新增：起始run
+            'run_end': None          # 新增：结束run
+        }
+        
+        # 从文件名提取信息 (例如: HadronBJ_e31_r1501-r1650.log)
+        filename = os.path.basename(log_file_path)
+        filename_match = re.match(r'(\w+)_e(\d+)_r(\d+)-r(\d+)\.log', filename)
+        if filename_match:
+            job_info['skim_type'] = filename_match.group(1)
+            job_info['exp'] = int(filename_match.group(2))
+            job_info['run_start'] = int(filename_match.group(3))
+            job_info['run_end'] = int(filename_match.group(4))
+            job_info['run_range'] = f"r{filename_match.group(3)}-r{filename_match.group(4)}"
+        
+        # 从路径提取数据类型
+        path_parts = log_file_path.split('/')
+        if 'log' in path_parts:
+            log_index = path_parts.index('log')
+            if log_index + 1 < len(path_parts):
+                job_info['data_type'] = path_parts[log_index + 1]
+        
+        # 提取Job ID
+        job_id_match = re.search(r'Job (\d+):', content)
+        if job_id_match:
+            job_info['job_id'] = job_id_match.group(1)
+        
+        # 提取提交命令 - 从 "# LSBATCH: User input" 后面的行提取
+        user_input_match = re.search(r'# LSBATCH: User input\s*\n(.+?)(?:\n-{10,}|\n\n|\Z)', content, re.DOTALL)
+        if user_input_match:
+            job_info['submit_command'] = user_input_match.group(1).strip()
+        
+        # 检查作业状态
+        if "Successfully completed." in content:
+            job_info['status'] = 'Success'
+        elif "Exited with exit code" in content:
+            # 提取退出代码
+            exit_code_match = re.search(r'Exited with exit code (\d+)', content)
+            if exit_code_match:
+                job_info['exit_code'] = int(exit_code_match.group(1))
+                job_info['status'] = 'Failed'
+            else:
+                job_info['status'] = 'Failed'
+        elif "Terminated" in content and "Started" in content:
+            # 作业被终止但没有明确的成功/失败状态
+            job_info['status'] = 'Terminated'
+        
+        # 提取错误信息（如果有的话）
+        error_patterns = [
+            r'\[ERROR\]\s+(.+?)(?:\s+\{|$)',
+            r'ERROR:\s+(.+?)(?:\n|$)'
+        ]
+        
+        for pattern in error_patterns:
+            error_matches = re.findall(pattern, content, re.MULTILINE)
+            if error_matches:
+                # 只取前几个错误信息，避免太长
+                job_info['error_message'] = '; '.join(error_matches[:3])
+                break
+        
+        return job_info
+        
+    except Exception as e:
+        return {
+            'file': os.path.basename(log_file_path),
+            'path': log_file_path,
+            'status': 'Parse_Error',
+            'error_message': str(e)
+        }
+
+def reconstruct_bsub_command(job_info):
+    """
+    根据解析的信息重新构建bsub命令
+    """
+    if not all([job_info.get('skim_type'), job_info.get('exp'), 
+                job_info.get('run_start'), job_info.get('run_end'), 
+                job_info.get('data_type')]):
+        return None
+    
+    # 从日志文件路径提取项目目录
+    # 假设日志文件路径格式为: /path/to/project_dir/log/data_type/filename.log
+    log_path = job_info['path']
+    path_parts = log_path.split('/')
+    
+    if 'log' in path_parts:
+        log_index = path_parts.index('log')
+        # 项目目录是log目录的父目录
+        if log_index > 0:
+            project_dir = '/'.join(path_parts[:log_index])
+            # 如果路径是绝对路径，保持原样；如果是相对路径，加上./
+            if not project_dir.startswith('/'):
+                project_dir = './' + project_dir
+        else:
+            # 无法确定项目目录，使用当前目录
+            project_dir = '.'
+    else:
+        # 无法从路径中找到log目录，使用当前目录
+        project_dir = '.'
+    
+    # 从submit_command中提取脚本名称和队列信息
+    script_name = 'analysis.py'  # 默认脚本名
+    
+    if job_info.get('submit_command'):
+        cmd_parts = job_info['submit_command'].split()
+        
+        # 提取脚本路径
+        for i, part in enumerate(cmd_parts):
+            if part == 'basf2' and i+1 < len(cmd_parts):
+                script_path = cmd_parts[i+1]
+                # 提取脚本名和路径
+                if '/' in script_path:
+                    script_parts = script_path.split('/')
+                    script_name = script_parts[-1]
+                    # 尝试提取更完整的脚本路径
+                    if len(script_parts) > 1:
+                        # 检查脚本路径是否包含项目目录
+                        potential_project_dir = '/'.join(script_parts[:-1])
+                        if potential_project_dir and not potential_project_dir.startswith('.'):
+                            # 使用脚本路径中的项目目录
+                            project_dir = potential_project_dir
+                else:
+                    script_name = script_path
+                break
+    
+    # 构建日志文件路径
+    log_file = f"{project_dir}/log/{job_info['data_type']}/{job_info['file']}"
+    
+    # 构建输出文件路径
+    root_file = f"{project_dir}/{job_info['data_type']}/{job_info['skim_type']}_e{job_info['exp']}_r{job_info['run_start']}-r{job_info['run_end']}.root"
+    
+    # 构建URL
+    url = f"http://bweb3/mdst.php?ex={job_info['exp']}&rs={job_info['run_start']}&re={job_info['run_end']}&skm={job_info['skim_type']}&dt={job_info['data_type']}&bl=caseB"
+    
+    # 从原始命令中提取分析脚本的完整路径
+    analysis_script = f"{project_dir}/{script_name}"
+    if job_info.get('submit_command'):
+        cmd_parts = job_info['submit_command'].split()
+        basf2_index = -1
+        for i, part in enumerate(cmd_parts):
+            if part == 'basf2':
+                basf2_index = i
+                break
+        
+        if basf2_index >= 0 and basf2_index + 1 < len(cmd_parts):
+            analysis_script = cmd_parts[basf2_index + 1]
+    
+    # 构建完整的bsub命令
+    bsub_cmd = f'bsub -q l -oo {log_file} basf2 {analysis_script} belle1 data "{url}" {root_file}'
+    
+    return bsub_cmd
+
+def generate_autorun_command(job_info):
+    """
+    生成对应的autorunExpdata.py命令
+    """
+    if not all([job_info.get('exp'), job_info.get('run_start'), 
+                job_info.get('run_end'), job_info.get('skim_type'), 
+                job_info.get('data_type')]):
+        return None
+    
+    # 计算runs_per_job (这里假设为单个job)
+    runs_per_job = job_info['run_end'] - job_info['run_start'] + 1
+    
+    autorun_cmd = f"./autorunExpdata.py {job_info['exp']} {job_info['run_start']} {job_info['run_end']} {job_info['skim_type']} {job_info['data_type']} {runs_per_job}"
+    
+    return autorun_cmd
+
+def scan_log_directory(log_dir, pattern="*.log"):
+    """
+    扫描日志目录，获取所有作业状态
+    """
+    log_files = []
+    
+    # 递归搜索所有日志文件
+    for root, dirs, files in os.walk(log_dir):
+        for file in files:
+            if file.endswith('.log'):
+                log_files.append(os.path.join(root, file))
+    
+    print(f"Found {len(log_files)} log files")
+    
+    results = []
+    for log_file in log_files:
+        job_info = parse_log_file(log_file)
+        # 为每个job重新构建bsub命令
+        job_info['bsub_command'] = reconstruct_bsub_command(job_info)
+        results.append(job_info)
+    
+    return results
+
+def generate_summary_report(job_results):
+    """
+    生成汇总报告
+    """
+    # 按状态统计
+    status_counts = defaultdict(int)
+    exp_stats = defaultdict(lambda: defaultdict(int))
+    data_type_stats = defaultdict(lambda: defaultdict(int))
+    exit_code_stats = defaultdict(int)  # 新增：按退出代码统计
+    
+    failed_jobs = []
+    success_jobs = []
+    
+    for job in job_results:
+        status = job['status']
+        status_counts[status] += 1
+        
+        if job['exp']:
+            exp_stats[job['exp']][status] += 1
+        
+        if job['data_type']:
+            data_type_stats[job['data_type']][status] += 1
+        
+        # 统计退出代码
+        if job.get('exit_code') is not None:
+            exit_code_stats[job['exit_code']] += 1
+        
+        if status in ['Failed', 'Terminated']:
+            failed_jobs.append(job)
+        elif status == 'Success':
+            success_jobs.append(job)
+    
+    # 打印汇总报告
+    print("\n" + "="*80)
+    print("JOB STATUS SUMMARY REPORT")
+    print("="*80)
+    
+    print(f"\nOverall Status:")
+    print(f"  Total jobs: {len(job_results)}")
+    for status, count in sorted(status_counts.items()):
+        percentage = (count / len(job_results)) * 100
+        print(f"  {status}: {count} ({percentage:.1f}%)")
+    
+    # 按退出代码统计
+    if exit_code_stats:
+        print(f"\nFailed Jobs by Exit Code:")
+        for exit_code in sorted(exit_code_stats.keys()):
+            count = exit_code_stats[exit_code]
+            print(f"  Exit Code {exit_code}: {count} jobs")
+    
+    # 按实验统计
+    if exp_stats:
+        print(f"\nStatus by Experiment:")
+        for exp in sorted(exp_stats.keys()):
+            stats = exp_stats[exp]
+            total = sum(stats.values())
+            print(f"  Exp {exp}: Total={total}", end="")
+            for status in ['Success', 'Failed', 'Terminated', 'Unknown']:
+                if status in stats:
+                    print(f", {status}={stats[status]}", end="")
+            print()
+    
+    # 按数据类型统计
+    if data_type_stats:
+        print(f"\nStatus by Data Type:")
+        for data_type in sorted(data_type_stats.keys()):
+            stats = data_type_stats[data_type]
+            total = sum(stats.values())
+            print(f"  {data_type}: Total={total}", end="")
+            for status in ['Success', 'Failed', 'Terminated', 'Unknown']:
+                if status in stats:
+                    print(f", {status}={stats[status]}", end="")
+            print()
+    
+    return failed_jobs, success_jobs, exit_code_stats
+
+def print_detailed_failed_jobs(failed_jobs):
+    """
+    打印失败作业的详细信息
+    """
+    if not failed_jobs:
+        return
+    
+    print(f"\nFAILED JOBS DETAILS ({len(failed_jobs)} jobs):")
+    print("-" * 80)
+    
+    for job in failed_jobs:
+        print(f"File: {job['file']}")
+        if job['job_id']:
+            print(f"  Job ID: {job['job_id']}")
+        if job['exp']:
+            print(f"  Experiment: {job['exp']}")
+        if job['run_range']:
+            print(f"  Run Range: {job['run_range']}")
+        if job['exit_code']:
+            print(f"  Exit Code: {job['exit_code']}")
+        if job['error_message']:
+            # 截断过长的错误信息
+            error_msg = job['error_message']
+            if len(error_msg) > 200:
+                error_msg = error_msg[:200] + "..."
+            print(f"  Error: {error_msg}")
+        print(f"  Path: {job['path']}")
+        if job.get('submit_command'):
+            print(f"  Original Command: {job['submit_command']}")
+        print()
+
+def print_exit_code_summary(exit_code_stats, job_results):
+    """
+    打印按退出代码分组的详细统计
+    """
+    if not exit_code_stats:
+        return
+    
+    print(f"\nDETAILED EXIT CODE ANALYSIS:")
+    print("-" * 80)
+    
+    for exit_code in sorted(exit_code_stats.keys()):
+        count = exit_code_stats[exit_code]
+        jobs_with_code = [job for job in job_results if job.get('exit_code') == exit_code]
+        
+        print(f"\nExit Code {exit_code}: {count} jobs")
+        
+        # 按实验分组
+        exp_groups = defaultdict(list)
+        for job in jobs_with_code:
+            if job.get('exp'):
+                exp_groups[job['exp']].append(job)
+        
+        for exp in sorted(exp_groups.keys()):
+            exp_jobs = exp_groups[exp]
+            print(f"  Exp {exp}: {len(exp_jobs)} jobs")
+            
+            # 显示前几个作为示例
+            for job in exp_jobs[:3]:
+                print(f"    - {job['file']}")
+            if len(exp_jobs) > 3:
+                print(f"    ... and {len(exp_jobs) - 3} more")
+
+def save_failed_job_commands(failed_jobs, output_file, exit_code_filter=None):
+    """
+    保存失败作业的重新提交命令到文件
+    """
+    # 如果指定了exit_code过滤器，只保存特定退出代码的作业
+    if exit_code_filter is not None:
+        failed_jobs = [job for job in failed_jobs if job.get('exit_code') == exit_code_filter]
+        if not failed_jobs:
+            print(f"No jobs found with exit code {exit_code_filter}")
+            return
+    
+    with open(output_file, 'w') as f:
+        f.write("#!/bin/bash\n")
+        f.write("# Script to resubmit failed jobs\n")
+        f.write("# Generated automatically by check_job_status.py\n")
+        if exit_code_filter is not None:
+            f.write(f"# Filtered for exit code: {exit_code_filter}\n")
+        f.write("\n")
+        
+        bsub_commands = []
+        autorun_commands = []
+        
+        for job in failed_jobs:
+            if job.get('bsub_command'):
+                bsub_commands.append(job['bsub_command'])
+            
+            autorun_cmd = generate_autorun_command(job)
+            if autorun_cmd:
+                autorun_commands.append(autorun_cmd)
+        
+        # 写入bsub命令
+        if bsub_commands:
+            f.write("# === Direct bsub commands ===\n")
+            for cmd in bsub_commands:
+                f.write(f"{cmd}\n")
+            f.write("\n")
+        
+        # 写入autorun命令
+        if autorun_commands:
+            f.write("# === Equivalent autorunExpdata.py commands ===\n")
+            f.write("# Note: These might submit jobs with different run ranges\n")
+            f.write("# Please verify the run ranges match your requirements\n")
+            for cmd in autorun_commands:
+                f.write(f"# {cmd}\n")
+        
+        # 写入详细信息
+        f.write("\n# === Failed job details ===\n")
+        for job in failed_jobs:
+            f.write(f"# File: {job['file']}\n")
+            if job.get('job_id'):
+                f.write(f"#   Job ID: {job['job_id']}\n")
+            if job.get('exp'):
+                f.write(f"#   Exp: {job['exp']}, Run: {job.get('run_start', 'N/A')}-{job.get('run_end', 'N/A')}\n")
+            if job.get('exit_code'):
+                f.write(f"#   Exit Code: {job['exit_code']}\n")
+            if job.get('submit_command'):
+                f.write(f"#   Original: {job['submit_command']}\n")
+            f.write("#\n")
+
+def save_results_to_file(job_results, output_file):
+    """
+    将结果保存到文件
+    """
+    with open(output_file, 'w') as f:
+        f.write("Job Status Report\n")
+        f.write("="*50 + "\n\n")
+        
+        for job in job_results:
+            f.write(f"File: {job['file']}\n")
+            f.write(f"Status: {job['status']}\n")
+            if job['job_id']:
+                f.write(f"Job ID: {job['job_id']}\n")
+            if job['exp']:
+                f.write(f"Experiment: {job['exp']}\n")
+            if job['run_range']:
+                f.write(f"Run Range: {job['run_range']}\n")
+            if job['data_type']:
+                f.write(f"Data Type: {job['data_type']}\n")
+            if job['exit_code']:
+                f.write(f"Exit Code: {job['exit_code']}\n")
+            if job['error_message']:
+                f.write(f"Error: {job['error_message']}\n")
+            if job.get('submit_command'):
+                f.write(f"Original Command: {job['submit_command']}\n")
+            if job.get('bsub_command'):
+                f.write(f"Resubmit Command: {job['bsub_command']}\n")
+            f.write(f"Path: {job['path']}\n")
+            f.write("-" * 40 + "\n\n")
+
+def main():
+    parser = argparse.ArgumentParser(description="Check LSF job status from log files")
+    parser.add_argument("log_dir", help="Directory containing log files")
+    parser.add_argument("--output", "-o", help="Output file to save detailed results")
+    parser.add_argument("--resubmit", "-r", help="Output shell script file for resubmitting failed jobs")
+    parser.add_argument("--show-success", action="store_true", help="Show successful jobs details")
+    parser.add_argument("--show-failed", action="store_true", default=True, help="Show failed jobs details (default)")
+    parser.add_argument("--show-commands", action="store_true", help="Show resubmit commands for failed jobs")
+    parser.add_argument("--show-exit-codes", action="store_true", help="Show detailed exit code analysis")
+    parser.add_argument("--exp", type=int, help="Filter by experiment number")
+    parser.add_argument("--data-type", help="Filter by data type")
+    parser.add_argument("--status", choices=['Success', 'Failed', 'Terminated', 'Unknown'], 
+                       help="Filter by job status")
+    parser.add_argument("--exit-code", type=int, help="Filter by specific exit code")
+    
+    args = parser.parse_args()
+    
+    if not os.path.exists(args.log_dir):
+        print(f"Error: Directory {args.log_dir} does not exist")
+        return 1
+    
+    print(f"Scanning log files in: {args.log_dir}")
+    job_results = scan_log_directory(args.log_dir)
+    
+    # 应用过滤器
+    if args.exp:
+        job_results = [job for job in job_results if job.get('exp') == args.exp]
+        print(f"Filtered by experiment {args.exp}: {len(job_results)} jobs")
+    
+    if args.data_type:
+        job_results = [job for job in job_results if job.get('data_type') == args.data_type]
+        print(f"Filtered by data type {args.data_type}: {len(job_results)} jobs")
+    
+    if args.status:
+        job_results = [job for job in job_results if job.get('status') == args.status]
+        print(f"Filtered by status {args.status}: {len(job_results)} jobs")
+    
+    if args.exit_code is not None:
+        job_results = [job for job in job_results if job.get('exit_code') == args.exit_code]
+        print(f"Filtered by exit code {args.exit_code}: {len(job_results)} jobs")
+    
+    # 生成汇总报告
+    failed_jobs, success_jobs, exit_code_stats = generate_summary_report(job_results)
+    
+    # 显示退出代码详细分析
+    if args.show_exit_codes:
+        print_exit_code_summary(exit_code_stats, job_results)
+    
+    # 显示详细信息
+    if args.show_failed and failed_jobs:
+        print_detailed_failed_jobs(failed_jobs)
+    
+    if args.show_success and success_jobs:
+        print(f"\nSUCCESSFUL JOBS ({len(success_jobs)} jobs):")
+        print("-" * 80)
+        for job in success_jobs[:10]:  # 只显示前10个
+            print(f"  {job['file']} (Exp: {job.get('exp', 'N/A')}, {job.get('run_range', 'N/A')})")
+        if len(success_jobs) > 10:
+            print(f"  ... and {len(success_jobs) - 10} more successful jobs")
+    
+    # 显示重新提交命令
+    if args.show_commands and failed_jobs:
+        print(f"\nRESUBMIT COMMANDS FOR FAILED JOBS ({len(failed_jobs)} jobs):")
+        print("-" * 80)
+        for job in failed_jobs:
+            if job.get('bsub_command'):
+                print(f"# {job['file']} (Exit Code: {job.get('exit_code', 'N/A')})")
+                print(job['bsub_command'])
+                print()
+    
+    # 保存重新提交脚本
+    if args.resubmit and failed_jobs:
+        save_failed_job_commands(failed_jobs, args.resubmit, args.exit_code)
+        if args.exit_code is not None:
+            print(f"\nResubmit commands for exit code {args.exit_code} saved to: {args.resubmit}")
+        else:
+            print(f"\nResubmit commands saved to: {args.resubmit}")
+        print(f"To resubmit failed jobs, run: bash {args.resubmit}")
+    
+    # 保存到文件
+    if args.output:
+        save_results_to_file(job_results, args.output)
+        print(f"\nDetailed results saved to: {args.output}")
+    
+    return 0
+
+if __name__ == "__main__":
+    exit(main())

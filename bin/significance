@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+# filepath: /home/belle2/wangz/bin/significance
+# -*- coding: utf-8 -*-
+
+"""
+Significance calculator - Command line tool to calculate statistical significance.
+
+This tool uses ROOT's TMath and RooStats functionality to calculate the 
+statistical significance based on user inputs.
+"""
+
+import sys
+import argparse
+import logging
+from ROOT import TMath, RooStats
+
+def calculate_significance(para, n, diff):
+    """
+    Calculate statistical significance from input parameters.
+    
+    Args:
+        para (int): Parameter type (1 for s value, 2 for likelihood)
+        n (int): Number of degrees of freedom
+        diff (float): Difference value (Delta s or Delta likelihood)
+    
+    Returns:
+        float: The calculated statistical significance
+    
+    Raises:
+        ValueError: If calculation fails
+    """
+    try:
+        abs_diff = abs(diff)
+        prob = TMath.Prob(abs_diff * para, n)
+        significance = RooStats.PValueToSignificance(prob * 0.5)
+        return significance
+    except Exception as e:
+        raise ValueError(f"Significance calculation failed: {e}")
+
+def format_output(para, n, diff, significance):
+    """Format the output message with calculation results."""
+    param_type = "Delta s" if para == 1 else "Delta likelihood"
+    
+    return (
+        f"Your settings:\n"
+        f"para = {para}, number of parameters = {n}, {param_type} = {diff}\n"
+        f"The statistical significance: {significance:.6f}"
+    )
+
+def main():
+    """Process command line arguments and calculate significance."""
+    parser = argparse.ArgumentParser(
+        description="Calculate statistical significance using ROOT",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    
+    parser.add_argument(
+        "para", 
+        type=int, 
+        choices=[1, 2],
+        help="Parameter type: 1 for s value, 2 for likelihood (from RooFit)"
+    )
+    
+    parser.add_argument(
+        "ndof", 
+        type=int, 
+        help="Number of degrees of freedom"
+    )
+    
+    parser.add_argument(
+        "diff", 
+        type=float, 
+        help="Difference value (Delta s or Delta likelihood)"
+    )
+    
+    # Optional argument for output format
+    parser.add_argument(
+        "--verbose", "-v",
+        action="store_true",
+        help="Enable verbose output with additional information"
+    )
+    
+    args = parser.parse_args()
+    
+    # Set up logging
+    log_level = logging.INFO if args.verbose else logging.WARNING
+    logging.basicConfig(
+        level=log_level,
+        format='%(levelname)s: %(message)s'
+    )
+    
+    try:
+        # Validate arguments
+        if args.ndof <= 0:
+            parser.error("Number of degrees of freedom must be positive")
+            
+        # Calculate significance
+        significance = calculate_significance(args.para, args.ndof, args.diff)
+        
+        # Display results
+        print(format_output(args.para, args.ndof, args.diff, significance))
+        
+        return 0
+        
+    except ValueError as e:
+        logging.error(str(e))
+        return 1
+    except Exception as e:
+        logging.error(f"Unexpected error: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        return 2
+
+if __name__ == "__main__":
+    sys.exit(main())

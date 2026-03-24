@@ -1,0 +1,129 @@
+#!/usr/bin/env python3 
+
+import subprocess
+import os
+import sys
+import argparse
+
+def parser_mdst_list(input_dir, output_dir, module):
+    """
+    retrive mdst file path list in the subdir of input_dir,
+    then use them to create BASF script
+    """
+    basf_script_dir = os.path.join(output_dir, "scripts")
+    rootFiles_dir =  os.path.join(output_dir, "rootFiles")
+    os.makedirs(basf_script_dir, exist_ok=True)
+    os.makedirs(rootFiles_dir, exist_ok=True)
+
+    for entry in sorted(os.listdir(input_dir)):
+        subdir = os.path.join(input_dir, entry)
+        continnum_dir = os.path.join(subdir, 'continuum')
+
+        mdst_files = []
+        for root, _, files in os.walk(continnum_dir):
+            for fn in files:
+                if fn.endswith('.mdst'):
+                    mdst_files.append(os.path.join(root, fn))
+            mdst_files.sort()
+
+            entry = entry.replace('.','_')
+
+            basf_script_path = os.path.join(basf_script_dir, f'{entry}.sh')
+            rootFile_path = os.path.join(rootFiles_dir, f"{entry}.root")
+            _create_basf_script(basf_script_path, mdst_files,
+                                rootFile_path, module)
+
+
+def _create_basf_script(filename, mdsts, output_root, module):
+    """
+    Create BASF shell script for job submission
+    Args:
+        filename: str, path to output shell script
+        url: str, mdst data url 
+        output_root: str, path to output ROOT file
+    """
+
+    with open(filename, 'w') as f:
+        # Write header
+        f.write("#!/bin/bash\n")
+        f.write('source /sw/belle/local/etc/bashrc_general\n')
+        f.write('export BASF_USER_IF=basfsh.so\n')
+        f.write('export BASF_USER_INIT=user_init.so\n\n')
+
+        # Write BASF configuration
+        f.write('basf << EOF\n\n')
+        f.write(f'module register fix_mdst {module}\n')
+        f.write('path create main\n')
+        f.write('path create Analysis\n\n')
+        
+        f.write(f'path add_module main fix_mdst {module}\n\n')
+        
+        f.write('path add_condition main >:0:Analysis\n')
+        f.write('path add_condition main =<:0:KILL\n')
+        f.write(f'path add_module Analysis {module}\n\n')
+        
+        # Set parameters
+        f.write(f'module put_parameter {module} output_filename\{output_root}\n' )
+        f.write(f'module put_parameter {module} isMCSample\\1\n\n')
+        f.write(f'module put_parameter {module} rmMCTree\\1\n')
+        f.write(f'module put_parameter {module} rmTree\\0\n')
+        f.write(f'module put_parameter {module} rmMixTree\\1\n\n')
+        
+        # Initialize
+        f.write('initialize\n')
+
+        # Process events 
+        for mdst in mdsts:
+            f.write(f'process_event {mdst}\n')
+        
+        # Terminate
+        f.write('terminate\n')
+        f.write('EOF\n')
+        f.write('exit\n')
+        
+        # Make script executable
+        os.chmod(filename, 0o755)
+
+def submit_job(output_dir):
+
+    basf_scripts_dir = os.path.join(output_dir, "scripts")
+    log_dir = os.path.join(output_dir, "logs")
+    os.makedirs(log_dir, exist_ok=True)
+
+    job_count = 0
+    for script in sorted(os.listdir(basf_scripts_dir)):
+        log_file = os.path.join(log_dir, script.replace('.sh', '.log'))
+        cmd = f"bsub -q s -cwd {output_dir} -oo {log_file}  /sw/belle/local/bin/centos7-exec bash {os.path.join(basf_scripts_dir, script)}"
+        subprocess.run(cmd, shell=True, check=True)
+        job_count += 1
+
+    print(f"Submitted {job_count} jobs.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Create and submit BASF jobs using a .so module file")
+    parser.add_argument("so_file", help="Path to the .so module file")
+    args = parser.parse_args()
+
+    so_file = os.path.abspath(args.so_file)
+    if not os.path.isfile(so_file):
+        raise SystemExit(f"Error: file not found: {so_file}")
+    if not so_file.endswith('.so'):
+        raise SystemExit("Error: provided file must have a .so extension")
+
+    output_dir = os.path.dirname(so_file)
+    so_filename = os.path.basename(so_file)
+    module = so_filename.replace('.so', '')
+    
+    input_dirs = "/gpfs/group/belle/bdata-files/mcprod/nagoya"
+    for d in sorted(os.listdir(input_dirs)):
+        subdir = os.path.join(input_dirs, d)
+        if not os.path.isdir(subdir):
+            continue
+        parser_mdst_list(subdir, output_dir, module)
+
+    submit_job(output_dir)
+
+
+if __name__ == "__main__":
+    main()

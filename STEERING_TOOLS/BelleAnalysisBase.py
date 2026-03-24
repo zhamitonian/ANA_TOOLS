@@ -6,6 +6,11 @@
 # Handles differences between Belle I and Belle II
 ###################################################
 
+## version 2.0.0
+## author: wangz
+## date: 2025-12-16
+
+
 import basf2 as b2
 import modularAnalysis as ma
 import variables.utils as vu
@@ -48,6 +53,8 @@ class BelleAnalysisBase:
         self.is_test_mode = False
         self.command_line_options = {}
         print(f"BelleAnalysisBase initialized with belle_version: {self.belle_version}, analysis_mode: {self.analysis_mode}")
+
+        self.setup_environment()
 
     @staticmethod
     def get_random_id(size=6, chars=string.ascii_uppercase + string.digits):
@@ -136,6 +143,7 @@ class BelleAnalysisBase:
                     
         # Notify about updating mode and version
         print(f"Updating BelleAnalysisBase to belle_version= {self.belle_version}, analysis_mode= {self.analysis_mode}")
+        self.setup_environment()
 
         return belle_version, analysis_mode, input_file, output_file
     
@@ -145,8 +153,20 @@ class BelleAnalysisBase:
             # Set Belle I specific environment variables
             os.environ["USE_GRAND_REPROCESS_DATA"] = "1"
             os.environ["PGUSER"] = "g0db"
-            # Set Belle II conditions for Belle I data
-            b2.conditions.globaltags = ['B2BII']
+            
+            #b2.conditions.globaltags = ['B2BII']
+            
+            # Set Belle II conditions for Belle I 
+            b2.conditions.disable_globaltag_replay()
+
+            b2.conditions.globaltags=['B2BII','BellePID',
+                                          'b2bii_beamParameters_with_smearing']
+            if self.is_signal_mc or self.is_generic_mc:
+                b2.conditions.prepend_globaltag('B2BII_MC')
+ 
+            b2.conditions.prepend_globaltag('Legacy_CollisionAxisCMS_Belle')
+            b2.conditions.prepend_globaltag('analysis_b2bii')
+            print("Environment set for Belle I analysis")
             return True
         return False
     
@@ -172,15 +192,29 @@ class BelleAnalysisBase:
             from b2biiConversion import convertBelleMdstToBelleIIMdst
             
             # Use Belle I to Belle II conversion
+            # implementation for reconstruction, if need read generate level distribution, 
+            # set applySkim = False
+            #if self.is_signal_mc:
             convertBelleMdstToBelleIIMdst(
                 input_file, 
                 enableNisKsFinder=False, 
                 enableEvtcls=True, 
-                HadronA=False, 
-                HadronB=False, 
+                HadronA=True, 
+                HadronB=True, 
+                applySkim=True,
                 path=path
             )
-            
+#            else:
+#                convertBelleMdstToBelleIIMdst(
+#                    input_file, 
+#                    applySkim=False, 
+#                    useBelleDBServer=None, 
+#                    convertBeamParameters=True,
+#                    generatorLevelReconstruction=False, generatorLevelMCMatching=False, entrySequences=None,
+#                    matchType2E9oE25Threshold=-1.1, enableNisKsFinder=True, HadronA=True, HadronB=True,
+#                    enableRecTrg=False, enableEvtcls=True, SmearTrack=2, enableLocalDB=True,
+#                    path=path)
+#           
             self.has_initialized_conversion = True
             return True
         elif not self.has_initialized_conversion:
@@ -201,7 +235,8 @@ class BelleAnalysisBase:
         var.addAlias('px_CMS', 'useCMSFrame(px)')
         var.addAlias('py_CMS', 'useCMSFrame(py)')
         var.addAlias('pz_CMS', 'useCMSFrame(pz)')
-        var.addAlias('theta_CMS', 'useCMSFrame(cosTheta)')
+        #var.addAlias('theta_CMS', 'useCMSFrame(cosTheta)')
+        var.addAlias('theta_CMS', 'useCMSFrame(theta)')
         var.addAlias('phi_CMS', 'useCMSFrame(phi)')
         
         # Useful aliases for both Belle I and Belle II

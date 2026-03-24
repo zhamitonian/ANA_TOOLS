@@ -1,6 +1,7 @@
 import ROOT
 import os
 import numpy as np
+from math import sqrt
 from typing import List, Dict, Tuple, Optional, Union, Any
 
 class HistStyle:
@@ -12,7 +13,7 @@ class HistStyle:
         draw_option: str = "HIST",
         line_color: int = ROOT.kBlack,
         line_style: int = 1,
-        line_width: int = 1,
+        line_width: int = 2,
         fill_style: int = 0,
         marker_style: int = 20,
         marker_size: float = 1.0,
@@ -33,12 +34,12 @@ class HistStyle:
     @staticmethod
     def error_bars(color: int) -> 'HistStyle':
         """Create histogram style with error bars"""
-        return HistStyle("E1", color, 1, 1, 0, 20, 1.0, False, False)
+        return HistStyle("E1", color, 1, 2, 0, 20, 1.0, False, False)
     
     @staticmethod
     def filled_hist(color: int, fill_style: int = 3001, stacked: bool = True) -> 'HistStyle':
         """Create filled histogram style"""
-        return HistStyle("HIST", color, 1, 1, fill_style, 1, 1.0, stacked, True)
+        return HistStyle("HIST", color, 1, 2, fill_style, 1, 1.0, stacked, True)
     
     @staticmethod
     def line_hist(color: int, line_style: int = 1, line_width: int = 2) -> 'HistStyle':
@@ -106,10 +107,13 @@ def style_draw(
     legend_position: int = 2,
     y_min: float = 0,
     y_max: float = -1,
-    use_user_y_range: bool = False
-) -> ROOT.TCanvas:
+    use_user_y_range: bool = False,
+    pad: Optional[ROOT.TPad] = None,
+    save: bool = True,
+) -> Union[ROOT.TCanvas, ROOT.TPad]:
     """
-    Advanced histogram drawing function with style objects
+    Advanced histogram drawing function with style objects.
+    If pad is provided, draw into that pad instead of creating a new canvas.
     
     Parameters:
     -----------
@@ -133,6 +137,8 @@ def style_draw(
         Maximum value for Y-axis (if use_user_y_range is True)
     use_user_y_range : bool, optional
         Whether to use user-provided Y-axis range
+    pad : ROOT.TPad, optional
+        Existing TPad to draw into instead of creating a new canvas
     """
     if leg_texts is None:
         leg_texts = []
@@ -140,110 +146,171 @@ def style_draw(
     if styles is None:
         styles = []
     
+    # CRITICAL: Clone histograms IMMEDIATELY to avoid address issues
+    # Create unique ID for this drawing session
+    uid = f"{ROOT.TUUID().AsString()}"
+    
     # Get number of histograms from the list length
     num = len(hist_list)
     
+    # Clone all histograms first with unique names
+    cloned_hists = []
+    for i in range(num):
+        if "RResultPtr" in str(type(hist_list[i])):
+            h_temp = hist_list[i].GetValue()
+        else:
+            h_temp = hist_list[i]
+        h_clone = h_temp.Clone(f"{h_temp.GetName()}_clone_{uid}_{i}")
+        ROOT.SetOwnership(h_clone, False)
+        cloned_hists.append(h_clone)
+    
+    # Work with cloned list from now on
+    working_hists = cloned_hists
+    
     ROOT.gStyle.SetLabelSize(0.04,"xyz")
-    ROOT.gStyle.SetPadTopMargin(.1)
-    ROOT.gStyle.SetPadLeftMargin(.14)
-    ROOT.gStyle.SetPadRightMargin(.07)
-    ROOT.gStyle.SetPadBottomMargin(.14)
-    ROOT.gStyle.SetTitleSize(0.04,"xyz")
+    #ROOT.gStyle.SetTitleSize(0.04,"xyz")
+    ROOT.gStyle.SetTitleSize(0.05,"xyz")
     ROOT.gStyle.SetOptTitle(0)
     ROOT.gStyle.SetMarkerSize(0.5)
-    ROOT.gStyle.SetLabelFont(22,"XYZ")
-    ROOT.gStyle.SetTitleFont(22,"XYZ")
-    ROOT.gStyle.SetCanvasDefH(1080)
-    ROOT.gStyle.SetCanvasDefW(1600)
     ROOT.gStyle.SetCanvasColor(ROOT.kWhite)
     ROOT.gStyle.SetPadTickX(1)
     ROOT.gStyle.SetPadTickY(1)
     ROOT.gStyle.SetPadGridX(1)
     ROOT.gStyle.SetPadGridY(1)
+
+    ROOT.gStyle.SetLegendFont(22)
+    ROOT.gStyle.SetLegendBorderSize(0)
+    ROOT.gStyle.SetLegendFillColor(0) 
+    ROOT.gStyle.SetLabelFont(22,"XYZ")
+    ROOT.gStyle.SetTitleFont(22,"XYZ")
     
     # Ensure we have enough styles for all histograms
     styles = ensure_styles(num, styles)
     
+    area_scale = 1
     # Create canvas
-    c = ROOT.TCanvas("c", "", 1600, 1080)
-    if log_y:
-        c.SetLogy()
-    
+    if pad is not None:
+        # Don't call UseCurrentStyle() for pad to preserve user's margin settings
+        # else it would override user's margin settings, and use the gStyle settings
+        #pad.UseCurrentStyle()
+        pad.SetTickx(1)
+        pad.SetTicky(1)
+        pad.SetGridx(1)
+        pad.SetGridy(1)
+        area_scale = pad.GetWNDC() * pad.GetHNDC() 
+        
+        ROOT.gStyle.SetLabelSize(0.04/area_scale,"xz")
+        ROOT.gStyle.SetLabelSize(0.04/area_scale * 0.75,"y")
+        ROOT.gStyle.SetTitleSize(0.05/area_scale,"xyz")
+        
+        ## previous global size setting not working for error bar hist
+        working_hists[0].GetYaxis().SetLabelSize(0.04/area_scale *0.75)
+        working_hists[0].GetXaxis().SetLabelSize(0.04/area_scale)
+        working_hists[0].GetXaxis().SetTitleSize(0.05/area_scale)
+        working_hists[0].GetYaxis().SetTitleSize(0.05/area_scale)
+        
+        pad.cd()
+        
+        c = pad.GetCanvas()
+    else:
+        c = ROOT.TCanvas("c", "", 1600, 1080)
+        # Apply margin settings only for new canvas
+        ROOT.gStyle.SetPadTopMargin(.1)
+        ROOT.gStyle.SetPadLeftMargin(.14)
+        ROOT.gStyle.SetPadRightMargin(.07)
+        ROOT.gStyle.SetPadBottomMargin(.14)
+        c.UseCurrentStyle()
+        if log_y:
+            c.SetLogy()
+
+    if log_y and pad is not None:
+        pad.SetLogy()
+
     # Configure stats display
     ROOT.gStyle.SetOptStat(1111 if show_stats else 0)
     ROOT.gStyle.SetStatX(0.93)
     ROOT.gStyle.SetStatY(0.9)
+
     
-    # Create two THStacks - one for stacked histograms, one for unstacked histograms
-    hs_stacked = ROOT.THStack("hsStacked", "")
-    hs_unstacked = ROOT.THStack("hsUnstacked", "")
+    # UNIQUE stack names to avoid collisions across calls
+    hs_stacked = ROOT.THStack(f"hsStacked_{uid}", "")
+    hs_unstacked = ROOT.THStack(f"hsUnstacked_{uid}", "")
     
     has_stack = False
     has_unstacked = False
-    has_special_draw = False  # For histograms that need special drawing (E1, P, etc.)
-    
-    # First pass: Apply styles, add to appropriate stack, and find global y-axis range
+
     global_min = 1e9
     global_max = -1e9
-    
     st = [None] * num
-    
-    for i in range(num):
-        if "RResultPtr" in str(type(hist_list[i])):
-            hist_list[i] = hist_list[i].GetValue()  # Convert RResultPtr(from RDataFrame) to actual histogram
-        
-        #global_max = max(global_max, hist_list[i].GetMaximum())
-        #global_min = min(global_min, hist_list[i].GetMinimum())
 
-        # Apply styling
-        hist_list[i].SetLineColor(styles[i].line_color)
-        hist_list[i].SetLineStyle(styles[i].line_style)
-        hist_list[i].SetLineWidth(styles[i].line_width)
-        hist_list[i].SetMarkerStyle(styles[i].marker_style)
-        hist_list[i].SetMarkerSize(styles[i].marker_size)
-        hist_list[i].SetMarkerColor(styles[i].line_color)
+    # Process axis titles once before loop (for THStack later)
+    y_title = working_hists[0].GetYaxis().GetTitle()
+    x_title = working_hists[0].GetXaxis().GetTitle()
+    y_title_offset = working_hists[0].GetYaxis().GetTitleOffset()#/area_scale
+    x_title_offset = working_hists[0].GetXaxis().GetTitleOffset()#/area_scale
+
+    # if is in [bracket], treat as unit, y title would be Entries/(XX unit)
+    if y_title and y_title[0] == "[" and y_title[-1] == "]":
+        y_unit = y_title[1:-1]
+
+        bin_width = working_hists[0].GetBinWidth(1)
+        if y_unit.strip() == "":
+            y_unit = ""  # keep empty to avoid trailing space
+        if y_unit == "MeV":
+            y_title = f"Events/({bin_width * 1000:.2f} MeV)"
+        elif y_unit:
+            y_title = f"Events/({bin_width:.2f} {y_unit})"
+        else:
+            y_title = f"Events/({bin_width:.2f})"
+
+    # Apply styling to all cloned histograms
+    for i in range(num):
+        h = working_hists[i]
         
-        # Set Y-axis title if not already set
-        if not hist_list[0].GetYaxis().GetTitle():
-            hist_list[i].GetYaxis().SetTitle(f"Events/({hist_list[0].GetBinWidth(1)*1000:.3f}MeV)")
+        # Apply styling
+        h.SetLineColor(styles[i].line_color)
+        h.SetLineStyle(styles[i].line_style)
+        h.SetLineWidth(styles[i].line_width)
+        h.SetMarkerStyle(styles[i].marker_style)
+        h.SetMarkerSize(styles[i].marker_size)
+        h.SetMarkerColor(styles[i].line_color)
         
         # Apply fill style to all histograms that need it
         if styles[i].stack or styles[i].fill:
-            hist_list[i].SetFillColor(styles[i].line_color)
-            hist_list[i].SetFillStyle(styles[i].fill_style)
+            h.SetFillColor(styles[i].line_color)
+            h.SetFillStyle(styles[i].fill_style)
         
         # Add to appropriate THStack
         if styles[i].stack:
-            hs_stacked.Add(hist_list[i])
+            hs_stacked.Add(h)
             has_stack = True
         elif styles[i].draw_option == "HIST":
-            hs_unstacked.Add(hist_list[i])
+            hs_unstacked.Add(h)
             has_unstacked = True
-        #else:
-            #has_special_draw = True
     
         # Calculate global Y range including error bars if applicable
-        for bin in range(1, hist_list[i].GetNbinsX() + 1):
-            bin_content = hist_list[i].GetBinContent(bin)
-            bin_error = hist_list[i].GetBinError(bin)
+        for b in range(1, h.GetNbinsX() + 1):
+            cval = h.GetBinContent(b)
+            cerr = h.GetBinError(b)
             
             # For histograms with error bars, consider the content ± error
             if "E" in styles[i].draw_option:
-                global_min = min(global_min, bin_content - bin_error)
-                global_max = max(global_max, bin_content + bin_error)
+                global_min = min(global_min, cval - cerr)
+                global_max = max(global_max, cval + cerr)
             else:
-                global_min = min(global_min, bin_content)
-                global_max = max(global_max, bin_content)
+                global_min = min(global_min, cval)
+                global_max = max(global_max, cval)
 
-    if has_stack: 
-        global_max = max( hs_stacked.GetStack().Last().GetMaximum() ,global_max)
+    if has_stack:
+        global_max = max(hs_stacked.GetStack().Last().GetMaximum(), global_max)
 
     # Add some padding to the global range
-    if global_min > 0 and not log_y:
-        global_min = 0  # Start from 0 for linear scale if possible
-    if log_y and global_min <= 0:
-        global_min = 0.1  # Avoid 0 or negative values for log scale
-    global_max *= 1.1  # Add 10% padding at the top
+    if log_y:
+        global_min = max(global_min, 0.1)
+        global_max *= 10
+    else:
+        global_min = 0 if global_min > 0 else global_min * 1.1
+        global_max *= 1.1  # Add 10% padding
      
     # Use user-provided range if specified, otherwise use calculated global range
     final_min = y_min if use_user_y_range and y_max > y_min else global_min
@@ -251,45 +318,52 @@ def style_draw(
     
     # Draw the stacks and histograms in the right order
     if has_stack:
-        hs_stacked.Draw("HIST")
-        hs_stacked.GetXaxis().SetTitle(hist_list[0].GetXaxis().GetTitle())
-        hs_stacked.GetYaxis().SetTitle(hist_list[0].GetYaxis().GetTitle())
-        
-        # Apply Y range
+        # Apply Y range before drawing
         hs_stacked.SetMinimum(final_min)
         hs_stacked.SetMaximum(final_max)
+        
+        hs_stacked.Draw("HIST")
+        
+        # Set axis titles AFTER drawing (THStack axes only exist after Draw)
+        hs_stacked.GetXaxis().SetTitle(x_title)
+        hs_stacked.GetYaxis().SetTitle(y_title)
+        hs_stacked.GetXaxis().SetTitleOffset(x_title_offset)
+        hs_stacked.GetYaxis().SetTitleOffset(y_title_offset)
         
         # Draw unstacked histograms if any
         if has_unstacked:
             hs_unstacked.Draw("HIST NOSTACK SAME")
-    
     elif has_unstacked:
-        # Only unstacked histograms
-        hs_unstacked.Draw("HIST NOSTACK")
-        hs_unstacked.GetXaxis().SetTitle(hist_list[0].GetXaxis().GetTitle())
-        hs_unstacked.GetYaxis().SetTitle(hist_list[0].GetYaxis().GetTitle())
-        
-        # Apply Y range
+        # Apply Y range before drawing
         hs_unstacked.SetMinimum(final_min)
         hs_unstacked.SetMaximum(final_max)
-    
-    elif num > 0:
+        
+        # Only unstacked histograms
+        hs_unstacked.Draw("HIST NOSTACK")
+        
+        # Set axis titles AFTER drawing (THStack axes only exist after Draw)
+        hs_unstacked.GetXaxis().SetTitle(x_title)
+        hs_unstacked.GetYaxis().SetTitle(y_title)
+        hs_unstacked.GetXaxis().SetTitleOffset(x_title_offset)
+        hs_unstacked.GetYaxis().SetTitleOffset(y_title_offset)
+    elif working_hists:
         # If no stacks were used at all, draw first histogram directly
-        hist_list[0].Draw(styles[0].get_draw_option())
+        working_hists[0].Draw(styles[0].get_draw_option())
         
         # Apply Y range
-        hist_list[0].GetYaxis().SetRangeUser(final_min, final_max)
+        working_hists[0].GetYaxis().SetRangeUser(final_min, final_max)
+        working_hists[0].GetYaxis().SetTitle(y_title)
     
     # Draw histograms with special drawing options
     for i in range(num):
         if not styles[i].stack and styles[i].draw_option != "HIST":
-            hist_list[i].Draw(styles[i].get_draw_option(True))  # Always draw with SAME
+            working_hists[i].Draw(styles[i].get_draw_option(True))  # Always draw with SAME
         
         # Configure stats boxes if enabled
         if show_stats and i > 0:
             ROOT.gStyle.SetStatTextColor(styles[i].line_color)
             c.Update()
-            st[i] = hist_list[i].FindObject("stats")
+            st[i] = working_hists[i].FindObject("stats")
             if st[i]:
                 # Position stats boxes based on legend position
                 if legend_position == 0:
@@ -306,18 +380,31 @@ def style_draw(
     
     # Create and configure legend
     num_stats = num if show_stats else 0
-    
-    if legend_position == 0:  # left
-        legend = ROOT.TLegend(0.14, 0.9 - 0.16 * num_stats - 0.05 * num, 0.34, 0.9 - 0.16 * num_stats)
-    elif legend_position == 1:  # middle
-        legend = ROOT.TLegend(0.43, 0.9 - 0.16 * num_stats - 0.05 * num, 0.63, 0.9 - 0.16 * num_stats)
-    else:  # right (default)
-        legend = ROOT.TLegend(0.73, 0.9 - 0.16 * num_stats - 0.05 * num, 0.93, 0.9 - 0.16 * num_stats)
-    
-    legend.SetBorderSize(0)
+
+    area_scale = 1.25
+
+    top = 0.9 - 0.16 * num_stats
+    width = 0.2 * sqrt(area_scale)
+    height = (0.16 * num_stats + 0.05 * num) * sqrt(area_scale)
+
+    if legend_position == 0:  # left - anchor at top-left
+        left = 0.13
+        right = left + width
+    elif legend_position == 2:  # right - anchor at top-right
+        right = 0.13 + 0.3 * 2 + 0.2
+        left = right - width
+    else:  # center - anchor at top-center
+        center = 0.13 + 0.3 * 1 + 0.1
+        left = center - width/2
+        right = center + width/2
+
+    bottom = top - height
+
+    legend = ROOT.TLegend(left, bottom, right, top)
     legend.SetFillStyle(0)
-    legend.SetFillColor(0)
-    
+    legend.SetBorderSize(0)
+    legend.SetTextSize(0.03 * area_scale)    
+
     # Add legend entries if provided
     if leg_texts:
         for i in range(min(num, len(leg_texts))):
@@ -328,40 +415,61 @@ def style_draw(
             else:
                 leg_style = "l"  # line style
 
-            # Create a temporary clone to ensure PyROOT can handle the object correctly
-            temp_hist = hist_list[i].Clone(f"legend_hist_{i}")
-            ROOT.SetOwnership(temp_hist, False)  # Prevent garbage collection
-            legend.AddEntry(temp_hist, str(leg_texts[i]), str(leg_style))
+            # Use the histogram directly from our working list
+            legend.AddEntry(working_hists[i], str(leg_texts[i]), str(leg_style))
         legend.Draw()
     
-    c.SetName(f"canvas : {hist_list[0].GetTitle()}")
-    c.Update()
-    
-    # Save output
-    if output_name.endswith(".root"):
-        try:
-            root_file = ROOT.TFile.Open(output_name, "UPDATE")
-            if not root_file or root_file.IsZombie():
-                root_file = ROOT.TFile(output_name, "RECREATE")
-            c.Write()
-            root_file.Close()
-        except Exception as e:
-            print(f"Error saving to ROOT file: {e}")
-            c.Print(output_name)
+    # Store the working histograms in the canvas to prevent garbage collection
+    # This is CRITICAL to keep the histogram objects alive
+    if pad is not None:
+        if not hasattr(pad, '_stored_hists'):
+            pad._stored_hists = []
+        pad._stored_hists.extend(working_hists)
+        pad._stored_stacks = [hs_stacked, hs_unstacked]
+        pad._stored_legend = legend
     else:
-        c.Print(output_name)
+        if not hasattr(c, '_stored_hists'):
+            c._stored_hists = []
+        c._stored_hists.extend(working_hists)
+        c._stored_stacks = [hs_stacked, hs_unstacked]
+        c._stored_legend = legend
+    
+    c.SetName(f"canvas : {working_hists[0].GetTitle()}")
+    c.Update()
 
-    return c
+    # Save output:
+    # If drawing inside an external pad, user may want to control when to save.
+    # We still honor output_name; it will save the whole canvas.
+    if save and output_name:
+        out_dir = os.path.dirname(output_name)
+        if out_dir and not os.path.exists(out_dir):
+            print(f"Warning: Output directory [{out_dir}] does not exist, exit.")
+            return pad if pad is not None else c
+            #os.makedirs(out_dir, exist_ok=True)
+        if output_name.endswith(".root"):
+            try:
+                rf_out = ROOT.TFile.Open(output_name, "UPDATE")
+                if not rf_out or rf_out.IsZombie():
+                    rf_out = ROOT.TFile(output_name, "RECREATE")
+                c.Write()
+                rf_out.Close()
+            except Exception as e:
+                print(f"Error saving to ROOT file: {e}")
+                c.Print(output_name)
+        else:
+            c.Print(output_name)
+
+    return pad if pad is not None else c
 
 
 def graph_draw(
-    graph_list: List[Union[ROOT.TGraph, ROOT.TGraphErrors, ROOT.TGraphAsymmErrors]], 
-    output_name: str, 
+    graph_list: List[Union[ROOT.TGraph, ROOT.TGraphErrors, ROOT.TGraphAsymmErrors]],
+    output_name: str,
     leg_texts: List[str] = None,
-    line_color: List[int] = None, 
-    line_style: List[int] = None, 
-    line_width: List[int] = None, 
-    marker_style: List[int] = None, 
+    line_color: List[int] = None,
+    line_style: List[int] = None,
+    line_width: List[int] = None,
+    marker_style: List[int] = None,
     marker_size: List[float] = None
 ) -> None:
     """
@@ -393,8 +501,8 @@ def graph_draw(
     ROOT.gStyle.SetTitleSize(0.04,"xyz")
     ROOT.gStyle.SetOptTitle(0)
     ROOT.gStyle.SetMarkerSize(0.5)
-    ROOT.gStyle.SetLabelFont(42,"XYZ")
-    ROOT.gStyle.SetTitleFont(42,"XYZ")
+    ROOT.gStyle.SetLabelFont(22,"XYZ")
+    ROOT.gStyle.SetTitleFont(22,"XYZ")
     ROOT.gStyle.SetCanvasDefH(1080)
     ROOT.gStyle.SetCanvasDefW(1600)
     ROOT.gStyle.SetCanvasColor(ROOT.kWhite)
@@ -411,8 +519,8 @@ def graph_draw(
         graph_list[i].GetYaxis().SetTitle(graph_list[0].GetYaxis().GetTitle())
         graph_list[i].GetXaxis().CenterTitle()
         graph_list[i].GetYaxis().CenterTitle()
-        graph_list[i].GetXaxis().SetTitleOffset(1.2)
-        graph_list[i].GetYaxis().SetTitleOffset(1.2)
+        graph_list[i].GetXaxis().SetTitleOffset(1.0)
+        graph_list[i].GetYaxis().SetTitleOffset(1.0)
         
         graph_list[i].SetMarkerStyle(marker_style[i] if i < len(marker_style) else 20)
         graph_list[i].SetLineWidth(line_width[i] if i < len(line_width) else 1)

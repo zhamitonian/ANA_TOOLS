@@ -1,0 +1,265 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import os
+import re
+from collections import defaultdict
+
+class LSFLogParser:
+    def __init__(self):
+        self.log_infos = []
+
+    def par_log_file(self, log_file_path):
+        """
+        parse single log file , extract job status
+        """
+        try:
+            with open(log_file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                content = f.read()
+
+            job_info = {
+                'file' : os.path.basename(log_file_path),
+                'path' : log_file_path,
+                'status' : 'Unknow',
+                'job_id' : None,
+                'lsf_queue' : None,
+                'exit_code' : None,
+                'error_message' : None,
+                'submit_command' : None,
+                'bsub_command' : None
+            }
+
+            job_id_match = re.search(r'Job (\d+):', content)
+            if job_id_match:
+                job_info['job_id'] = job_id_match.group(1)
+            
+            queue_match = re.search(r'in queue <(\w+)>', content)
+            if queue_match:
+                job_info['lsf_queue'] = queue_match.group(1)
+
+            user_input_match = re.search(r'# LSBATCH: User input\s*\n(.+?)(?:\n-{10,}|\n\n|\Z)', content, re.DOTALL)
+            if user_input_match:
+                job_info['submit_command'] = user_input_match.group(1).strip()
+
+            if "Successfully completed." in content:
+                job_info['status'] = 'Success'
+            elif "Exited with exit code" in content:
+                exit_code_match = re.search(r'Exited with exit code (\d+)', content)
+                if exit_code_match:
+                    job_info['exit_code'] = int(exit_code_match.group(1))
+                job_info['status'] = 'Failed'
+            elif "Terminated" in content and "Started" in content:
+                job_info['status'] = 'Terminated'
+            
+            error_patterns = [
+                r'\[ERROR\]\s+(.+?)(?:\s+\{|$)',
+                r'ERROR:\s+(.+?)(?:\n|$)'
+            ]
+            for pattern in error_patterns:
+                error_matches = re.findall(pattern, content, re.MULTILINE)
+                if error_matches:
+                    # only extract first 3 error messages, if too many
+                    job_info['error_message'] = '; '.join(error_matches[:3])
+                    break
+
+            return job_info
+            
+        except Exception as e:
+            return {
+                'file' : os.path.basename(log_file_path),
+                'path' : log_file_path,
+                'status' : 'error',
+                'error' : str(e)
+            }
+
+    def reconstruct_bsub_command(self, job_info):
+        """
+        reconstruct bsub command from log content
+        """
+        log_path = job_info['path']
+        bsub_cmd = f"bsub -q {job_info.get('lsf_queue', 's')} -oo {log_path} {job_info.get('submit_command', '')}"
+        job_info['bsub_command'] = bsub_cmd
+
+        return job_info
+
+    def scan_log_dir(self, log_dir):
+        """
+        scan log directory, get all log files, recursively
+        and parse them
+        """
+
+        for root, dirs, files in os.walk(log_dir):
+            for file in files:
+                if file.endswith('.log'):
+                    log_file_path = os.path.join(root, file)
+                    job_info = self.par_log_file(log_file_path) 
+                    job_info = self.reconstruct_bsub_command(job_info)
+                    self.log_infos.append(job_info)
+
+        print(f"Scanned {len(self.log_infos)} log files in {log_dir}")
+
+    def generate_summary_report(self, job_results=None):
+        """
+        generate summary report of all parsed log files
+        """
+        job_results = self.log_infos if job_results is None else job_results
+
+        status_counts = defaultdict(int)
+        exit_code_stats = defaultdict(int)  
+
+        falied_jobs = []
+        success_jobs = []
+
+        for job in job_results:
+            status = job['status']
+            status_counts[status] += 1
+
+            if job.get('exit_code') is not None:
+                exit_code_stats[job['exit_code']] += 1
+            
+            if status in ['Failed', 'Terminated']:
+                falied_jobs.append(job)
+            elif status == 'Success':
+                success_jobs.append(job)
+
+        self.num_jobs = len(job_results)
+
+        print("\n" + "="*80)
+        print("JOB STATUS SUMMARY REPORT")
+        print("="*80)
+
+        print(f"\nOverall Status:")
+        print(f"  Total jobs: {self.num_jobs}")
+        for status, count in sorted(status_counts.items()):
+            percentage = (count / self.num_jobs) * 100
+            print(f"  {status}: {count} ({percentage:.1f}%)")
+    
+        if exit_code_stats:
+            print(f"\nFailed Jobs by Exit Code:")
+            for exit_code in sorted(exit_code_stats.keys()):
+                count = exit_code_stats[exit_code]
+                print(f"  Exit Code {exit_code}: {count} jobs")
+
+        self.failed_jobs = falied_jobs
+
+        return falied_jobs, success_jobs
+
+    def print_detailed_failed_jobs(self, failed_jobs):
+        if not failed_jobs:
+            return
+    
+        print(f"\nFAILED JOBS DETAILS ({len(failed_jobs)} jobs):")
+        print("-" * 80)
+    
+        for job in failed_jobs:
+            print(f"File: {job['file']}")
+            if job['job_id']:
+                print(f"  Job ID: {job['job_id']}")
+            if job['exit_code']:
+                print(f"  Exit Code: {job['exit_code']}")
+            if job['error_message']:
+                # 截断过长的错误信息
+                error_msg = job['error_message']
+                if len(error_msg) > 200:
+                    error_msg = error_msg[:200] + "..."
+                print(f"  Error: {error_msg}")
+            print(f"  Path: {job['path']}")
+            if job.get('submit_command'):
+                print(f"  Original Command: {job['submit_command']}")
+            print()
+
+    def save_failed_job_commands(self, failed_jobs, output_file, exit_code_filter=None):
+        """
+        save failed job bsub commands to a file
+        exit_code_filter can be either a single integer or a list/set of integers
+        """
+        if exit_code_filter is not None:
+            # Handle both single exit code and list of exit codes
+            if isinstance(exit_code_filter, list) or isinstance(exit_code_filter, set):
+                # Convert to set for faster membership testing
+                exit_codes = set(exit_code_filter)
+                failed_jobs = [job for job in failed_jobs if job.get('exit_code') in exit_codes]
+                if not failed_jobs:
+                    print(f"No jobs found with exit codes {sorted(exit_codes)}")
+                    return
+            else:
+                # Backward compatibility for single exit code
+                failed_jobs = [job for job in failed_jobs if job.get('exit_code') == exit_code_filter]
+                if not failed_jobs:
+                    print(f"No jobs found with exit code {exit_code_filter}")
+                    return
+
+        bsub_commands = []
+        with open(output_file, 'w') as f:
+            f.write("#!/bin/bash\n")
+            f.write("# Script to resubmit failed jobs\n")
+            f.write("# Generated automatically by lsf_log_parser.py\n")
+            if exit_code_filter is not None:
+                if isinstance(exit_code_filter, list) or isinstance(exit_code_filter, set):
+                    f.write(f"# Filtered for exit codes: {sorted(exit_code_filter)}\n")
+                else:
+                    f.write(f"# Filtered for exit code: {exit_code_filter}\n")
+            f.write("\n")
+
+
+            for job in failed_jobs:
+                if job.get('bsub_command'):
+                    bsub_commands.append(job.get('bsub_command'))
+
+            if bsub_commands:
+                f.write("# === Direct bsub commands ===\n")
+                for cmd in bsub_commands:
+                    f.write(cmd + "\n")
+                f.write("\n")
+
+def main():
+    import argparse
+
+    parser  = argparse.ArgumentParser(description="Parse LSF log files and generate summary report")
+    parser.add_argument("log_dir", help="Directory containing log files")
+    parser.add_argument("--output", "-o", help="Output file to save detailed results")
+    parser.add_argument("--resubmit", "-r", help="Output shell script file for resubmitting failed jobs")
+    parser.add_argument("--status", choices=['Success', 'Failed', 'Terminated', 'Unknown'], 
+                    help="Filter by job status")
+    parser.add_argument("--exit-code", type=int, nargs='+', help="Filter by one or more exit codes (e.g. --exit-code 1 2 3)")
+
+    args = parser.parse_args()
+
+    logs_parser = LSFLogParser()
+
+    if not os.path.exists(args.log_dir):
+        print(f"Error: Directory {args.log_dir} does not exist")
+        return 1
+
+    print(f"Scanning log files in: {args.log_dir}")
+    logs_parser.scan_log_dir(args.log_dir)
+
+    job_results = logs_parser.log_infos
+
+    if args.status:
+        job_results = [job for job in job_results if job.get('status') == args.status]
+        print(f"Filtered by status {args.status}: {len(job_results)} jobs")
+
+    if args.exit_code is not None:
+        # args.exit_code is a list of integers now
+        exit_codes = set(args.exit_code)
+        job_results = [job for job in job_results if job.get('exit_code') in exit_codes]
+        print(f"Filtered by exit code in {sorted(exit_codes)}: {len(job_results)} jobs")
+
+    failed_jobs , success_jobs = logs_parser.generate_summary_report(job_results)
+    logs_parser.print_detailed_failed_jobs(failed_jobs)
+
+    if args.resubmit and failed_jobs:
+        # pass a list of exit codes to the save function for annotation/optional filtering
+        exit_code_arg_for_save = args.exit_code if args.exit_code is not None else None
+        logs_parser.save_failed_job_commands(failed_jobs, args.resubmit, exit_code_arg_for_save)
+        if args.exit_code is not None:
+            print(f"\nResubmit commands for exit code(s) {args.exit_code} saved to: {args.resubmit}")
+        else:
+            print(f"\nResubmit commands saved to: {args.resubmit}")
+        print(f"To resubmit failed jobs, run: bash {args.resubmit}")
+    
+    return 0
+
+if __name__ == "__main__":
+    main()
