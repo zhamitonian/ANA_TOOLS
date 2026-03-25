@@ -12,7 +12,7 @@ from typing import Optional, Union
 from array import array
 from DRAW import style_draw
 from PHY_CALCULATOR import PhysicsCalculator
-from .fit_tools import FIT_UTILS, QUICK_FIT
+from .utils.handle_fit_io import FIT_IO
 
 from math import sqrt
 
@@ -37,7 +37,7 @@ def perform_resonance_fit(input_tree:ROOT.TTree, output_dir:str, log_file:Option
     #x_min, x_max, nbin = 1, 1.06, 60
 
     var_config = [(f"{reso}_M", x_min, x_max)]  
-    tools = FIT_UTILS(log_file=log_file, var_config= var_config)
+    tools = FIT_IO(log_file=log_file, var_config= var_config)
 
     branches_name = kwargs.get('branches_name', None)
     print(f"binned_fit: { binned_fit}")
@@ -442,7 +442,7 @@ def perform_2dfit(tree:ROOT.TTree, output_dir:dir, log_file = None, bin_fit_rang
                   ("vpho_m2Recoil", 0, 80), 
                   ("vpho_ee_cms_pt", 0, 1)]
      
-    tools = FIT_UTILS(log_file=log_file ,var_config=var_config)
+    tools = FIT_IO(log_file=log_file ,var_config=var_config)
 
     # redirect log
     with tools.redirect_output():
@@ -783,7 +783,7 @@ def perform_chisq_fit(tree:ROOT.TTree, output_dir:str, log_file:Optional[str]=No
     unbinned = kwargs.get('unbinned',True)
 
     var_config = [(chisq_var, chisq_range[0], chisq_range[1]), ("vpho_M", 2, 3)]  
-    tools = FIT_UTILS(log_file=log_file, var_config=var_config)
+    tools = FIT_IO(log_file=log_file, var_config=var_config)
 
     #print(kwargs)
     branches_name = kwargs.get('branches_name', None)

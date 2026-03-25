@@ -14,7 +14,7 @@ from ROOT import RooStats
 import time
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Tuple
-from .fit_tools import FIT_UTILS
+from .utils.handle_fit_io import FIT_IO
 from .pdf_builders import PDF_REGISTRY
 from .model_parser import ModelParser
 
@@ -175,8 +175,7 @@ class DatasetConfig:
     """Dataset creation and processing configuration."""
     binned_fit: bool = False
     weight_branch: Optional[str] = None
-    branches_name: Optional[List[str]] = None
-    if_save: bool = False
+    target_branch: Optional[List[str]] = None
     perform_splot: bool = False
     
     def __post_init__(self):
@@ -290,7 +289,7 @@ class GenericFit:
         """Initialize workspace and tools."""
         # Convert Variable objects to tuples for FIT_UTILS
         var_tuples = self.fit_def.get_variable_tuples()
-        self.tools = FIT_UTILS(log_file=self.log_file, var_config=var_tuples)
+        self.tools = FIT_IO(log_file=self.log_file, var_config=var_tuples)
         self.workspace = ROOT.RooWorkspace("w", "workspace")
     
     def create_dataset(self):
@@ -301,12 +300,10 @@ class GenericFit:
         self.dataset = self.tools.handle_dataset(
             self.tree,
             self.workspace,
-            self.dataset_cfg.branches_name,
+            self.dataset_cfg.target_branch,
             self.dataset_cfg.binned_fit,
             nbin,
             weight_branch=self.dataset_cfg.weight_branch,
-            #save_rootFile=self.dataset_cfg.if_save
-            save_rootFile= False
         )
         
         self.workspace.Import(self.dataset, ROOT.RooFit.Rename("dataset"))
