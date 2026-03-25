@@ -14,7 +14,7 @@ from ROOT import RooStats
 import time
 from dataclasses import dataclass, field
 from typing import Optional, Dict, Any, List, Tuple
-from .fit_tools import FIT_UTILS
+from .utils.handle_fit_io import FIT_IO
 from .pdf_builders import PDF_REGISTRY
 from .model_parser import ModelParser
 
@@ -289,7 +289,7 @@ class GenericFit:
         """Initialize workspace and tools."""
         # Convert Variable objects to tuples for FIT_UTILS
         var_tuples = self.fit_def.get_variable_tuples()
-        self.tools = FIT_UTILS(log_file=self.log_file, var_config=var_tuples)
+        self.tools = FIT_IO(log_file=self.log_file, var_config=var_tuples)
         self.workspace = ROOT.RooWorkspace("w", "workspace")
     
     def create_dataset(self):
