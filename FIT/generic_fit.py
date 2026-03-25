@@ -175,8 +175,7 @@ class DatasetConfig:
     """Dataset creation and processing configuration."""
     binned_fit: bool = False
     weight_branch: Optional[str] = None
-    branches_name: Optional[List[str]] = None
-    if_save: bool = False
+    target_branch: Optional[List[str]] = None
     perform_splot: bool = False
     
     def __post_init__(self):
@@ -301,12 +300,10 @@ class GenericFit:
         self.dataset = self.tools.handle_dataset(
             self.tree,
             self.workspace,
-            self.dataset_cfg.branches_name,
+            self.dataset_cfg.target_branch,
             self.dataset_cfg.binned_fit,
             nbin,
             weight_branch=self.dataset_cfg.weight_branch,
-            #save_rootFile=self.dataset_cfg.if_save
-            save_rootFile= False
         )
         
         self.workspace.Import(self.dataset, ROOT.RooFit.Rename("dataset"))
