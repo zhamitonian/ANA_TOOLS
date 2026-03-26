@@ -21,7 +21,7 @@ from .model_parser import ModelParser
 
 """
 generic fit framework
-version : 2.1.6
+version : 2.1.7
 Date    : 2026-03-23
 Author  : wangzheng
 """
@@ -322,8 +322,8 @@ class GenericFit:
     def build_model(self):
         """Build model: resolve intermediate ops, then retrieve the final PDF."""
         parser = ModelParser(self.workspace)
-        model_name, self.yield_vars = parser.parse_model(self.model_str)
-        self.model = self.workspace.pdf(model_name.strip())
+        self.yield_vars = parser.parse_model(self.model_str, "model")
+        self.model = self.workspace.pdf("model")
     
     def fix_parameters_from_result(self, result: Any, param_names: List[str]):
         """Fix parameters from a previous fit result (e.g., MC fit)."""
@@ -894,6 +894,10 @@ date : 2026-03-18
 v2.1.6
 - fix chi2 calculation 's not compatible with unbinned dataset (RooChi2Var only accepts RooDataHist)
 date : 2026-03-23
+
+v2.1.7
+- update the use of model parser
+date : 2026-03-26
 """
 
 

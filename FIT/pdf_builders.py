@@ -4,8 +4,8 @@ PDF builder classes for constructing different types of signal and background PD
 This module provides a flexible way to construct various PDFs for fitting.
 Each builder encapsulates the logic for creating a specific type of PDF.
 
-version: 3.1
-date   : 2026-03-16
+version: 3.2
+date   : 2026-03-26
 author : wang zheng
 """
 
@@ -13,6 +13,7 @@ import re
 import ROOT
 from abc import ABC, abstractmethod
 from typing import Dict, Any, Optional
+from .model_parser import ModelParser
 
 
 class PDFBuilder(ABC):
@@ -638,6 +639,41 @@ class FlatBuilder(PDFBuilder):
         return pdf_name
 
 
+class CompositeBuilder(PDFBuilder):
+    """
+    Build a user-defined composite PDF using model-like operation syntax.
+
+    Config parameters:
+        - formula: operation expression, e.g.
+            "SUM(frac[0.3,0,1]*sig1, sig2)"
+            "PROD(sig1, sig2)"
+            "FCONV(x, SUM(f*a, b), reso)"
+
+    Notes:
+        - Top-level expression must be one operation call.
+        - Operation names are case-insensitive (SUM/sum/Sum, PROD/Prod/prod, ...).
+        - Nested operation calls are resolved by ModelParser.
+    """
+
+    PARAMETERS = {
+        "formula": None,
+    }
+
+    _OPS = ("PROD", "SUM", "RSUM", "FCONV", "NCONV")
+
+    def build(self, workspace: ROOT.RooWorkspace, var_name: str,
+              config: Dict[str, Any], pdf_name: str) -> str:
+        formula = config.get("formula")
+        if not formula:
+            raise ValueError(
+                f"CompositeBuilder for '{pdf_name}' requires config['formula']."
+            )
+
+        parser = ModelParser(workspace)
+        parser.parse_model(str(formula), final_pdf_name=pdf_name)
+        return pdf_name
+
+
 # template fit 
 class TemplateFitBuilder(PDFBuilder):
     """
@@ -693,9 +729,9 @@ class TemplateFitBuilder(PDFBuilder):
         temp_ws = ROOT.RooWorkspace("temp_ws_template", "Temporary workspace for template")
         
         # Create FIT_UTILS instance and use handle_dataset to create MC dataset
-        from .fit_tools import FIT_UTILS
+        from .utils.handle_fit_io import FIT_IO
         var_config = [(var_name, var.getMin(), var.getMax())]
-        tools = FIT_UTILS(log_file=None, var_config=var_config)
+        tools = FIT_IO(log_file=None, var_config=var_config)
         
         # Determine if we need binned dataset
         binned = config.get("binned", self.PARAMETERS["binned"])
@@ -761,6 +797,7 @@ class PDFBuilderRegistry:
         self.register("argus", ArgusBGBuilder())
         self.register("exponential", ExponentialBuilder())
         self.register("flat", FlatBuilder())
+        self.register("composite", CompositeBuilder())
         self.register("template", TemplateFitBuilder())
     
     def register(self, name: str, builder: PDFBuilder):
@@ -814,5 +851,14 @@ version: 3.1
 - Added `BifurGaussBuilder` for asymmetric Gaussian modeling via RooBifurGauss.
 - Registered new PDF type: `bifur_gauss`.
 date  : 2026-03-16
+author: wang zheng
+
+version: 3.2
+- Added `CompositeBuilder` and new PDF type `composite`.
+- Users can define intermediate PDFs with model-like operation syntax via
+    `PDFSpec(..., type='composite', config={'formula': 'SUM(...)'})`.
+- The builder reuses `ModelParser` for nested operation resolution and creates
+    the top-level PDF with the requested PDF name.
+date  : 2026-03-26
 author: wang zheng
 """
