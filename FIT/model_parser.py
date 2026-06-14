@@ -10,13 +10,13 @@ The model string must have a top-level operation as its root:
     "SUM(nsig[100,0,1000]*sig, nbkg[50,0,500]*bkg)"
     "SUM(nsig[...]*FCONV(x, bw, gauss), nbkg[...]*PROD(bkg1, bkg2))"
 
-version : 2.1
+version : 2.2
 author : zheng wang
-date : 2026-03-26
+date : 2026-06-14
 """
 
 import re
-from typing import List, Tuple
+from typing import List, Tuple, Optional, Union
 import ROOT
 
 _KNOWN_OPS = {'PROD', 'SUM', 'RSUM', 'FCONV', 'NCONV'}
@@ -83,7 +83,7 @@ class ModelParser:
 
         return self._resolve(expr[:m.start()] + tmp_name + expr[end + 1:])
 
-    def parse_model(self, model_str: str, final_pdf_name: str = None) -> List[str]:
+    def parse_model(self, model_str: str, final_pdf_name: Optional[str] = None) -> Union[Tuple[str, List[str]], List[str]]:
         """
         Resolve all op calls in *model_str*.
 
@@ -97,6 +97,7 @@ class ModelParser:
                 If provided, model_str must be a top-level operation call
                 (SUM/PROD/RSUM/FCONV/NCONV), and nested operations will be
                 resolved while the final PDF is created using this name.
+                A plain existing PDF name is also accepted, e.g. "sig".
         """
         self.counter = 0
         yield_names = re.findall(r'\b([A-Za-z_]\w*)\[[\d.,\s+-]+\]\s*\*', model_str)
@@ -105,6 +106,22 @@ class ModelParser:
             return processed, yield_names
 
         expr = model_str.strip()
+
+        # Allow a direct existing PDF name (e.g. model="sig").
+        # In this case, clone/import it using final_pdf_name so GenericFit can
+        # always retrieve workspace.pdf("model") uniformly.
+        if re.fullmatch(r"[A-Za-z_]\w*", expr):
+            src_pdf = self.workspace.pdf(expr)
+            if src_pdf is None:
+                raise ValueError(
+                    f"Model '{expr}' is not a top-level operation and was not found as an existing PDF in workspace."
+                )
+            if expr != final_pdf_name:
+                cloned = src_pdf.Clone(final_pdf_name)
+                getattr(self.workspace, "import")(cloned, ROOT.RooFit.RecycleConflictNodes())
+                print(f"[ModelParser] {expr} -> {final_pdf_name} (direct PDF alias)")
+            return yield_names
+
         m = re.match(r"^\s*([A-Za-z_]\w*)\s*\((.*)\)\s*$", expr, flags=re.IGNORECASE)
         if not m:
             raise ValueError(
@@ -134,4 +151,7 @@ change to parse method, just handle the intermediate PDF creation and return the
 
 version 2.1 : 2026-03-26
 support user provide final_pdf_name
+
+version 2.2 : 2026-06-14
+fix a bug in final_pdf_name handling where the top-level op is not SUM/PROD/RSUM/FCONV/NCONV but a direct PDF name, e.g. "sig". In this case, just clone/import it to final_pdf_name in the workspace and return.
 """
