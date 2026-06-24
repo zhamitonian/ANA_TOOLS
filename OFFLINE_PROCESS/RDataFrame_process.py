@@ -511,7 +511,8 @@ class RDF_process:
         return new_df
     
 
-    def calculate_PHI(self, df: ROOT.RDataFrame, particle_pair: Tuple[str, str]) -> ROOT.RDataFrame:
+    def calculate_PHI(self, df: ROOT.RDataFrame, particle_pair: Tuple[str, str], pxy_branch: Tuple[str, str] = ("px", "py"),
+                      branch_style:str="{name}_ee_cms_{comp}", output_branch:str = None) -> ROOT.RDataFrame:
         """
         Calculate the dot product of vectors x and y where:
         - x = pt1 + pt2
@@ -564,22 +565,24 @@ class RDF_process:
             RDF_process._defined_functions.add(func_name)
         
         p1, p2 = particle_pair
-        
-        if p1 == "phiA":
-            print(f"Calculating PHI for {p1} and {p2} using CMS variables")
-            new_df = new_df.Define(
-                f"PHI_{p1}_{p2}",
-                #f"calculate_vector_dot_product({p1}_px, {p1}_py, {p2}_px, {p2}_py)"
-                #f"calculate_vector_dot_product({p1}_ee_cms_px, {p1}_ee_cms_py, {p2}_ee_cms_px, {p2}_ee_cms_py)"
-                f"calculate_vector_dot_product({p1}_px_CMS, {p1}_py_CMS, {p2}_px_CMS, {p2}_py_CMS)"
-                #f"calculate_vector_dot_product({p1}_diGam_cms_px, {p1}_diGam_cms_py, {p2}_diGam_cms_px, {p2}_diGam_cms_py)"
-            )
-        else: 
-            new_df = new_df.Define(
-                f"PHI_{p1}_{p2}",
-                f"calculate_vector_dot_product({p1}_ee_cms_px, {p1}_ee_cms_py, {p2}_ee_cms_px, {p2}_ee_cms_py)"
-            )
+        p1_px = branch_style.format(name=p1, comp=pxy_branch[0])
+        p1_py = branch_style.format(name=p1, comp=pxy_branch[1])
+        p2_px = branch_style.format(name=p2, comp=pxy_branch[0])
+        p2_py = branch_style.format(name=p2, comp=pxy_branch[1])
+        if output_branch is None:
+            output_branch = f"PHI_{p1}_{p2}" 
 
+        if output_branch in new_df.GetColumnNames():
+            print(f"Warning: Branch '{output_branch}' already exists. It will be overwritten.")
+            new_df = new_df.Redefine(
+                output_branch,
+                f"calculate_vector_dot_product({p1_px}, {p1_py}, {p2_px}, {p2_py})"
+            )
+        else:
+            new_df = new_df.Define(
+                output_branch,
+                f"calculate_vector_dot_product({p1_px}, {p1_py}, {p2_px}, {p2_py})"
+            ) 
         return new_df
 
     def calculate_pt_diff(self, df: ROOT.RDataFrame, particle_pair: Tuple[str, str]) -> ROOT.RDataFrame:
@@ -656,15 +659,20 @@ class RDF_process:
         #print(f"Processing {total_entries} entries for best candidate selection...")
         
         # Use dictionary to track minimum values and corresponding entries
-        # Key: (experiment, run, event), Value: (min_value, [list_of_entry_indices])
         event_candidates = {}
         
         # Single pass through data to find minimum values and collect all entries with that minimum
         for i in range(total_entries):
-            event_key = (data["__experiment__"][i], 
-                        data["__run__"][i], 
-                        data["__event__"][i])
-            
+            # Encode (exp, run, evt) into a single integer, consistent with build_response_matrix.make_event_id
+            # Bit layout (from LSB):
+            #   0-35 : evt  (36 bits)
+            #   36-55: run  (20 bits)
+            #   56-63: exp  (8 bits)
+            exp_i = int(data["__experiment__"][i])
+            run_i = int(data["__run__"][i])
+            evt_i = int(data["__event__"][i])
+            event_key = (exp_i << 56) | (run_i << 36) | evt_i
+
             value = data[var][i]
             entry_idx = data["__entry__"][i]
             
@@ -734,7 +742,7 @@ class RDF_process:
         return result_df
 
     def quick_reweight(self, mc_df: ROOT.RDataFrame, hist_config:Optional[Tuple[str,int,float,float]]=None, data_df:Optional[ROOT.RDataFrame]=None, 
-                       h_data:Optional[ROOT.TH1]=None, MC_weight:Optional[str] =None,  simple_Scale: Optional[bool] = True) -> ROOT.RDataFrame:
+                       h_data:Optional[ROOT.TH1]=None, h_MC:Optional[ROOT.TH1]=None, MC_weight:Optional[str] =None,  simple_Scale: Optional[bool] = True) -> Tuple[ROOT.RDataFrame, ROOT.TH1]:
         """
         Reweight MC to match data distribution using a simple bin-by-bin ratio.
         
@@ -748,6 +756,8 @@ class RDF_process:
             Data dataframe for reference distribution 
         h_data : Optional[ROOT.TH1]
             Data histogram (alternative to providing data_df) , the hist's name should be the variable name
+        h_MC : Optional[ROOT.TH1]
+            MC histogram (alternative to providing mc_df) , the hist's name should be the variable name
         MC_weight : Optional[str]
             Optional weight column in MC dataframe to be applied when calculating MC histogram
         simple_Scale: bool
@@ -756,6 +766,7 @@ class RDF_process:
         Returns:
         --------
         ROOT.RDataFrame: Weighted MC dataframe
+        ROOT.TH1: Weight histogram
         """
         if (data_df is None and h_data is None) or (data_df is not None and h_data is not None):
             raise ValueError("Either provide data_df with hist_config OR provide h_data")
@@ -769,17 +780,22 @@ class RDF_process:
         else:
             var, bin, xmin ,xmax = h_data.GetName(), h_data.GetNbinsX(), h_data.GetXaxis().GetXmin(), h_data.GetXaxis().GetXmax()
 
-        if MC_weight is not None:
-            h_mc = mc_df.Histo1D((f"h_mc_{var}", f"MC {var}", bin, xmin, xmax), var, MC_weight)
+        # 支持外部传入 h_MC
+        if h_MC is not None:
+            h_mc_ptr = h_MC
         else:
-            h_mc = mc_df.Histo1D((f"h_mc_{var}", f"MC {var}", bin, xmin, xmax), var)
-        h_mc_ptr = h_mc.GetPtr()
+            if MC_weight is not None:
+                h_mc = mc_df.Histo1D((f"h_mc_{var}", f"MC {var}", bin, xmin, xmax), var, MC_weight)
+            else:
+                h_mc = mc_df.Histo1D((f"h_mc_{var}", f"MC {var}", bin, xmin, xmax), var)
+            h_mc_ptr = h_mc.GetPtr()
         h_data_ptr = h_data
         
         if simple_Scale:
             h_data_ptr.Scale(1.0 / h_data_ptr.Integral())
             h_mc_ptr.Scale(1.0 / h_mc_ptr.Integral())
         
+        hist_weight = h_data_ptr.Clone(f"h_weight_{var}")
         weights = []
         for i in range(1, bin + 1):
             data_content = h_data_ptr.GetBinContent(i)
@@ -787,6 +803,7 @@ class RDF_process:
             weight = data_content / mc_content if mc_content > 0 else 1.0
             print(f"Bin {i}: Data = {data_content}, MC = {mc_content}, Weight = {weight}")
             weights.append(weight)
+            hist_weight.SetBinContent(i, weight)
         
         weight_array = np.array(weights, dtype=np.float64)
 
@@ -823,7 +840,7 @@ class RDF_process:
         
         df_weighted = mc_df.Define("data_mc_weight", f"get_bin_weight({var}, {xmin}, {xmax}, {bin})")
         
-        return df_weighted
+        return df_weighted, hist_weight
 
     def calculate_HelicityAngle(self, df: ROOT.RDataFrame, 
                 comp_branches: Tuple[str, str, str, str], 
@@ -907,118 +924,130 @@ class RDF_process:
             ROOT.RDataFrame - New RDataFrame containing the best candidates
         """
         print("Using memory-efficient algorithm for very large datasets...")
-        
-        # Create a temporary column for composite key
-        df_with_key = input_df.Define(
-            "__composite_key__", 
-            "std::to_string(__experiment__) + \"_\" + std::to_string(__run__) + \"_\" + std::to_string(__event__)"
-        ).Define("__entry__", "rdfentry_")
-        
-        # Define C++ helper functions for efficient processing
+
+        # Ensure entry index column exists
+        if "__entry__" not in input_df.GetColumnNames():
+            df_with_key = input_df.Define("__entry__", "rdfentry_")
+        else:
+            df_with_key = input_df.Redefine("__entry__", "rdfentry_")
+
+        # Define C++ helper for efficient processing entirely on the C++ side
         func_name = "ProcessBestCandidates"
         if func_name not in RDF_process._defined_functions:
             ROOT.gInterpreter.Declare("""
                 #include <unordered_map>
+                #include <unordered_set>
                 #include <vector>
-                #include <string>
-                #include <limits>
-                
+                #include <cstdint>
+
                 class BestCandidateProcessor {
                 private:
-                    std::unordered_map<std::string, std::pair<double, std::vector<Long64_t>>> event_map;
-                    
+                    // Key: packed (exp, run, evt) using 64-bit integer
+                    std::unordered_map<std::uint64_t, std::pair<double, std::vector<Long64_t>>> event_map;
+
+                    static std::uint64_t make_key(int exp, Long64_t run, Long64_t evt) {
+                        std::uint64_t exp_u = static_cast<std::uint64_t>(exp);
+                        std::uint64_t run_u = static_cast<std::uint64_t>(run);
+                        std::uint64_t evt_u = static_cast<std::uint64_t>(evt);
+                        return (exp_u << 56) | (run_u << 36) | evt_u;
+                    }
+
                 public:
-                    void ProcessEntry(const std::string& key, double value, Long64_t entry) {
+                    void ProcessEntry(int exp, Long64_t run, Long64_t evt, double value, Long64_t entry) {
+                        std::uint64_t key = make_key(exp, run, evt);
                         auto it = event_map.find(key);
-                        
+
                         if (it == event_map.end()) {
-                            // First occurrence
-                            event_map[key] = std::make_pair(value, std::vector<Long64_t>{entry});
+                            event_map.emplace(key, std::make_pair(value, std::vector<Long64_t>{entry}));
                         } else {
                             double current_min = it->second.first;
-                            
+
                             if (value < current_min) {
-                                // Better candidate found
                                 it->second.first = value;
                                 it->second.second.clear();
                                 it->second.second.push_back(entry);
                             } else if (value == current_min) {
-                                // Same minimal value, add to list
                                 it->second.second.push_back(entry);
                             }
                         }
                     }
-                    
-                    std::vector<Long64_t> GetBestEntries() const {
-                        std::vector<Long64_t> result;
-                        for (const auto& pair : event_map) {
-                            const auto& entries = pair.second.second;
-                            result.insert(result.end(), entries.begin(), entries.end());
+
+                    void FillBestEntrySet(std::unordered_set<Long64_t>& dest) const {
+                        for (const auto& kv : event_map) {
+                            const auto& entries = kv.second.second;
+                            dest.insert(entries.begin(), entries.end());
                         }
-                        return result;
                     }
-                    
+
                     size_t GetUniqueEventCount() const {
                         return event_map.size();
                     }
                 };
-                
-                // Global processor instance
+
+                // Global processor and best-entry set
                 BestCandidateProcessor g_processor;
-                
+                std::unordered_set<Long64_t> g_best_entries;
+
                 void ResetProcessor() {
                     g_processor = BestCandidateProcessor();
+                    g_best_entries.clear();
                 }
-                
-                void ProcessBestCandidates(const std::string& key, double value, Long64_t entry) {
-                    g_processor.ProcessEntry(key, value, entry);
+
+                void ProcessBestCandidates(int exp, Long64_t run, Long64_t evt, double value, Long64_t entry) {
+                    g_processor.ProcessEntry(exp, run, evt, value, entry);
                 }
-                
-                std::vector<Long64_t> GetBestEntries() {
-                    return g_processor.GetBestEntries();
+
+                void FinalizeBestEntries() {
+                    g_best_entries.clear();
+                    g_processor.FillBestEntrySet(g_best_entries);
                 }
-                
+
                 size_t GetUniqueEventCount() {
                     return g_processor.GetUniqueEventCount();
                 }
+
+                size_t GetBestEntryCount() {
+                    return g_best_entries.size();
+                }
+
+                bool IsSelectedEntryMemEff(Long64_t entry) {
+                    return g_best_entries.find(entry) != g_best_entries.end();
+                }
             """)
             RDF_process._defined_functions.add(func_name)
-        
-        # Reset the processor
+
+        # Reset the processor state
         ROOT.ResetProcessor()
-        
-        # Process entries using ROOT's Foreach
+
+        # Extract needed columns once into NumPy arrays and feed them to
+        # the C++ processor. This avoids Python-side dictionaries and
+        # huge C++ initializers while staying robust for O(10M) entries.
         print("Processing entries to find best candidates...")
-        df_with_key.Foreach("ProcessBestCandidates(__composite_key__, {}, __entry__)".format(var))
-        
-        # Get results
-        best_entries = ROOT.GetBestEntries()
+
+        data = df_with_key.AsNumpy(columns=["__experiment__", "__run__", "__event__", var, "__entry__"])
+        n_entries = len(data["__experiment__"])
+
+        for i in range(n_entries):
+            ROOT.ProcessBestCandidates(
+                int(data["__experiment__"][i]),
+                int(data["__run__"][i]),
+                int(data["__event__"][i]),
+                float(data[var][i]),
+                int(data["__entry__"][i]),
+            )
+
+        # Build the best-entry set once on the C++ side
+        ROOT.FinalizeBestEntries()
         unique_count = ROOT.GetUniqueEventCount()
-        
-        print(f"Selected {len(best_entries)} best candidates")
+        selected_count = ROOT.GetBestEntryCount()
+
+        print(f"Selected {selected_count} best candidates")
         print(f"Number of unique events: {unique_count}")
-        
-        # Create filter function
-        filter_func_name = "IsSelectedEntryMemEff"
-        if filter_func_name not in RDF_process._defined_functions:
-            # Convert to set for O(1) lookup
-            entries_set = set(best_entries)
-            entries_str = "{" + ", ".join(map(str, sorted(entries_set))) + "}"
-            
-            ROOT.gInterpreter.Declare(f"""
-                #include <unordered_set>
-                
-                bool IsSelectedEntryMemEff(Long64_t entry) {{
-                    static std::unordered_set<Long64_t> selected_entries = {entries_str};
-                    return selected_entries.find(entry) != selected_entries.end();
-                }}
-            """)
-            RDF_process._defined_functions.add(filter_func_name)
-        
-        # Apply filter
+
+        # Apply filter using C++ membership test
         result_df = df_with_key.Filter("IsSelectedEntryMemEff(__entry__)")
         result_df = result_df.Redefine("__candidate__", "1").Redefine("__ncandidates__", "1")
-        
+
         return result_df
 
     def calculate_pt_toAxis(self, df: ROOT.RDataFrame, particle:Tuple[str, str, str], axis: Tuple[str, str], 
@@ -1184,7 +1213,7 @@ class RDF_process:
                     #include <TLorentzVector.h>
                     using namespace ROOT::VecOps;
                 
-                    std::tuple<RVec<double>, RVec<double>, RVec<double>, RVec<double>, RVec<double>, RVec<int>, RVec<int>>
+                    std::tuple<RVec<double>, RVec<double>, RVec<double>, RVec<double>, RVec<double>, RVec<double>, RVec<int>, RVec<int>>
                     calculate_all_pairs_cross(
                         const RVec<double>& p1_px, const RVec<double>& p1_py, const RVec<double>& p1_pz,
                         const RVec<double>& p2_px, const RVec<double>& p2_py, const RVec<double>& p2_pz,
@@ -1195,6 +1224,7 @@ class RDF_process:
                         RVec<double> py;
                         RVec<double> pz;
                         RVec<double> helicity_angles;
+                        RVec<double> plane_angles;
                         RVec<int> p1_index;
                         RVec<int> p2_index;
                     
@@ -1220,6 +1250,12 @@ class RDF_process:
                                 double cos_helicity = comp_dir.Dot(p1_dir);
                                 helicity_angles.push_back(cos_helicity);
 
+                                TVector3 beam_dir(0.0, 0.0, 1.0);
+                                TVector3 production_norm = beam_dir.Cross(comp_p.Vect());
+                                TVector3 decay_norm = comp_p.Vect().Cross(p1_rest.Vect());
+                                double plane_angle = production_norm.Angle(decay_norm);
+                                plane_angles.push_back(plane_angle);
+
                                 // Store all information
                                 E.push_back(comp_p.E());
                                 px.push_back(comp_p.Px());
@@ -1230,7 +1266,7 @@ class RDF_process:
                             }}
                         }}
                     
-                        return std::make_tuple(E, px, py, pz, helicity_angles, p1_index, p2_index);
+                        return std::make_tuple(E, px, py, pz, helicity_angles, plane_angles, p1_index, p2_index);
                     }}
                 """)
                 self._defined_functions.add(func_name)
@@ -1244,7 +1280,7 @@ class RDF_process:
                     #include <TLorentzVector.h>
                     using namespace ROOT::VecOps;
                 
-                    std::tuple<RVec<double>, RVec<double>, RVec<double>, RVec<double>, RVec<double>, RVec<int>, RVec<int>>
+                    std::tuple<RVec<double>, RVec<double>, RVec<double>, RVec<double>, RVec<double>, RVec<double>, RVec<int>, RVec<int>>
                     calculate_all_pairs_same(
                         const RVec<double>& p1_px, const RVec<double>& p1_py, const RVec<double>& p1_pz,
                         const RVec<double>& p2_px, const RVec<double>& p2_py, const RVec<double>& p2_pz,
@@ -1255,6 +1291,7 @@ class RDF_process:
                         RVec<double> py;
                         RVec<double> pz;
                         RVec<double> helicity_angles;
+                        RVec<double> plane_angles;
                         RVec<int> p1_index;
                         RVec<int> p2_index;
                     
@@ -1279,6 +1316,12 @@ class RDF_process:
                             double cos_helicity = comp_dir.Dot(p1_dir);
                             helicity_angles.push_back(cos_helicity);
 
+                            TVector3 beam_dir(0.0, 0.0, 1.0);
+                            TVector3 production_norm = beam_dir.Cross(comp_p.Vect());
+                            TVector3 decay_norm = comp_p.Vect().Cross(p1_rest.Vect());
+                            double plane_angle = production_norm.Angle(decay_norm);
+                            plane_angles.push_back(plane_angle);
+
                             // Store all information
                             E.push_back(comp_p.E());
                             px.push_back(comp_p.Px());
@@ -1288,7 +1331,7 @@ class RDF_process:
                             p2_index.push_back(i);
                         }}
                     
-                        return std::make_tuple(E, px, py, pz, helicity_angles, p1_index, p2_index);
+                        return std::make_tuple(E, px, py, pz, helicity_angles, plane_angles, p1_index, p2_index);
                     }}
                 """)
                 self._defined_functions.add(func_name)
@@ -1316,14 +1359,18 @@ class RDF_process:
                      "py": f"{names[0]}_py", 
                      "pz": f"{names[0]}_pz", 
                      "helicity_angle": f"{names[0]}_helicity_angle",
+                     "helicity_phi": f"{names[0]}_helicity_phi",
                      "p1_index": f"{names[1]}_index", 
                      "p2_index": f"{names[2]}_index"}
                     
-        key_to_idx = {"E":0, "px":1, "py":2, "pz":3, "helicity_angle":4,"p1_index":5, "p2_index":6}
+        key_to_idx = {"E":0, "px":1, "py":2, "pz":3, "helicity_angle":4, "helicity_phi":5, "p1_index":6, "p2_index":7}
                     
         for key, branch in variables.items():
             idx = key_to_idx[key]
-            new_df = new_df.Define(branch, f"std::get<{idx}>(Pairs)")
+            if branch not in new_df.GetColumnNames():
+                new_df = new_df.Define(branch, f"std::get<{idx}>(Pairs)")
+            else:
+                new_df = new_df.Redefine(branch, f"std::get<{idx}>(Pairs)")
 
         return new_df
 
@@ -1463,10 +1510,16 @@ class RDF_process:
             phi_name = f"{particle}_{phi_branch}"
             
             # Define combined result
-            new_df = new_df.Define(
-                f"__cartesian_{particle}__",
-                f"spherical_to_cartesian_auto({p_name}, {costheta_name}, {phi_name})"
-            )
+            if f"__cartesian_{particle}__" not in new_df.GetColumnNames():
+                new_df = new_df.Define(
+                    f"__cartesian_{particle}__",
+                    f"spherical_to_cartesian_auto({p_name}, {costheta_name}, {phi_name})"
+                )
+            else :
+                new_df = new_df.Redefine(
+                    f"__cartesian_{particle}__",
+                    f"spherical_to_cartesian_auto({p_name}, {costheta_name}, {phi_name})"
+                )
             
             # Extract individual components
             px_name = f"{particle}_px{output_suffix}"
@@ -1628,10 +1681,16 @@ class RDF_process:
             pz_name = f"{particle}_{pz_branch}"
             
             # Define combined result
-            new_df = new_df.Define(
-                f"__spherical_{particle}__",
-                f"cartesian_to_spherical_auto({px_name}, {py_name}, {pz_name})"
-            )
+            if f"__spherical_{particle}__" not in new_df.GetColumnNames():
+                new_df = new_df.Define(
+                    f"__spherical_{particle}__",
+                    f"cartesian_to_spherical_auto({px_name}, {py_name}, {pz_name})"
+                )
+            else:
+                new_df = new_df.Redefine(
+                    f"__spherical_{particle}__",
+                    f"cartesian_to_spherical_auto({px_name}, {py_name}, {pz_name})"
+                )
             
             # Extract individual components
             p_name = f"{particle}_p{output_suffix}"
@@ -1655,6 +1714,106 @@ class RDF_process:
         
         return new_df
 
+    def cal_pola_angles(self, df: ROOT.RDataFrame, 
+                                p1_branches : Tuple[str, str, str],
+                                p2_branches : Tuple[str, str, str],
+                                mass: Tuple[float, float], axis: Tuple[str, str],
+                                mother_index_branches: Optional[Tuple[str, str]] = None,
+                                output_names: Tuple[str, str] = ("cos_theta", "phi")) -> ROOT.RDataFrame:
+        """
+        Calculate the polarization angles for a given DataFrame.
+        """
+
+        new_df = df
+
+        func_name = "calculate_polarization_angles"
+        if func_name not in self._defined_functions:
+            ROOT.gInterpreter.Declare("""
+                #include <ROOT/RVec.hxx>
+                #include <TLorentzVector.h>
+                using namespace ROOT::VecOps;
+                
+                std::tuple<double, double> 
+                calculate_angles(
+                    double p1_px, double p1_py, double p1_pz,
+                    double p2_px, double p2_py, double p2_pz,
+                    double mass_p1, double mass_p2,
+                    double axis_costheta, double axis_phi,
+                    int mother_index_p1 =0, int mother_index_p2 = 0) // two index actually not used in this function, 
+                {
+                    TLorentzVector p1,p2;
+                    p1.SetXYZM(p1_px, p1_py, p1_pz, mass_p1);
+                    p2.SetXYZM(p2_px, p2_py, p2_pz, mass_p2);
+                    TLorentzVector parent = p1 + p2;
+
+                    // --- define coordinate system in parent rest frame ---
+                    // z: parent flight direction
+                    TVector3 z_hat = parent.Vect().Unit();
+
+                    // reference axis from spherical coordinates (axis_costheta, axis_phi)
+                    double axis_sintheta = sqrt(1.0 - axis_costheta * axis_costheta);
+                    TVector3 axis_vec(axis_sintheta * cos(axis_phi),
+                                    axis_sintheta * sin(axis_phi),
+                                    axis_costheta);
+
+                    // y = z x axis  (normal to the plane spanned by z and axis)
+                    TVector3 y_hat = z_hat.Cross(axis_vec).Unit();
+
+                    // x = y x z  (right-handed: x x y = z)
+                    TVector3 x_hat = y_hat.Cross(z_hat);
+
+                    // --- boost p1 into parent rest frame ---
+                    TLorentzVector p1_rest = p1;
+                    p1_rest.Boost(-parent.BoostVector());
+                    TVector3 p1_vec = p1_rest.Vect();
+
+                    // --- project onto new axes ---
+                    double cos_theta = p1_vec.Dot(z_hat) / p1_vec.Mag();
+                    double phi       = atan2(p1_vec.Dot(y_hat), p1_vec.Dot(x_hat));
+
+                    return std::make_tuple(cos_theta, phi);
+                }
+
+                std::tuple<RVec<double>, RVec<double>>
+                calculate_angles(
+                    RVec<double> p1_px, RVec<double> p1_py, RVec<double> p1_pz,
+                    RVec<double> p2_px, RVec<double> p2_py, RVec<double> p2_pz,
+                    double mass_p1, double mass_p2,
+                    double axis_costheta, double axis_phi,
+                    RVec<int> mother_index_p1, RVec<int> mother_index_p2)
+                {
+                    size_t n = mother_index_p1.size();
+                    RVec<double> cos_theta(n);
+                    RVec<double> phi(n);
+                    for (size_t i = 0; i < n; ++i) {
+                        std::tie(cos_theta[i], phi[i]) = calculate_angles(
+                            p1_px[mother_index_p1[i]], p1_py[mother_index_p1[i]], p1_pz[mother_index_p1[i]],
+                            p2_px[mother_index_p2[i]], p2_py[mother_index_p2[i]], p2_pz[mother_index_p2[i]],
+                            mass_p1, mass_p2,
+                            axis_costheta, axis_phi
+                        );
+                    }
+                    return std::make_tuple(cos_theta, phi);
+                }
+                """)
+            self._defined_functions.add(func_name)
+
+        if "Pairs" not in df.GetColumnNames():
+            new_df = new_df.Define("Pairs", f"calculate_angles({p1_branches[0]}, {p1_branches[1]}, {p1_branches[2]}, {p2_branches[0]}," 
+                                            f"{p2_branches[1]}, {p2_branches[2]}, {mass[0]}, {mass[1]}, {axis[0]}, {axis[1]}, {mother_index_branches[0]}, {mother_index_branches[1]})")
+        else: 
+            print("Warning: 'Pairs' column already exists. Overwriting with new angles.")
+            new_df = new_df.Redefine("Pairs", f"calculate_angles({p1_branches[0]}, {p1_branches[1]}, {p1_branches[2]}, {p2_branches[0]}," 
+                                            f"{p2_branches[1]}, {p2_branches[2]}, {mass[0]}, {mass[1]}, {axis[0]}, {axis[1]}, {mother_index_branches[0]}, {mother_index_branches[1]})")
+        
+        if output_names[0] in df.GetColumnNames() or output_names[1] in df.GetColumnNames():
+            print(f"Warning: Output columns {output_names} already exist. The calculation will not be written.")
+            return df
+        else :
+            new_df = new_df.Define(output_names[0], f"std::get<0>(Pairs)")
+            new_df = new_df.Define(output_names[1], f"std::get<1>(Pairs)")
+
+        return new_df
 
 
 

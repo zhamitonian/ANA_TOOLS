@@ -36,7 +36,7 @@ class QUICK_FIT():
 
     def __init__(self,
                  fit_function: Callable, 
-                 bin_var_config: Optional[List[Tuple]] = None,
+                 bin_var_config: dict[str, any] = None,
                  tree_path: str = "",
                  output_dir: str = "",
                  binned_fit: bool = False):

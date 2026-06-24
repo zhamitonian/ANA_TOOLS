@@ -17,7 +17,7 @@ class TreeSplitter:
             tree_path: Path to the input ROOT file/tree.
             bin_var_configs: Configuration for binning variables.
                              Dict of variable name to binning config, two formats supported:
-                             - Uniform binning: (min, max, nbins)  
+                             - Uniform binning: (nbins, min, max)  
                              - Custom binning : [bin_boundaries] (length = nbins + 1)
         """
         self.tree_path = tree_path
@@ -37,8 +37,8 @@ class TreeSplitter:
                 self.bins_per_dim.append(len(boundaries) - 1)
                 self.bin_boundaries.append(boundaries)
             elif isinstance(cfg, tuple) and len(cfg) == 3:
-                # Uniform binning: (min, max, nbins)
-                min_val, max_val, nbins = cfg
+                # Uniform binning: (nbins, min, max)
+                nbins, min_val, max_val = cfg
                 self.bins_per_dim.append(nbins)
                 self.bin_boundaries.append(np.linspace(min_val, max_val, nbins + 1))
             else:

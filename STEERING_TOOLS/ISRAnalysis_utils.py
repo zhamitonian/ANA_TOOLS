@@ -39,28 +39,34 @@ class ISRAnalysisTools(BelleAnalysisBase):
     def get_extra_gammaE(self, particle_list, track_cut, path):
         ma.buildRestOfEvent(target_list_name=particle_list, path=path)
 
-        roe_gamma = b2.create_path()
         photonList = 'gamma:extra_gamma' + self.get_random_id()
+        roe_gamma = b2.create_path()
+        gamma_cut = f'[isInRestOfEvent == 1] and E > 0.1 and eclClusterSpecialTrackMatched({track_cut}) != 1'
 
-        ma.fillParticleList(decayString=photonList,
-                    cut=f'[isInRestOfEvent == 1] and E > 0.1 and eclClusterSpecialTrackMatched({track_cut}) != 1',
+        if self.belle_version == "belle1":
+            ma.cutAndCopyList(photonList, "gamma:mdst", gamma_cut,path=roe_gamma)
+        else :
+            ma.fillParticleList(decayString=photonList,
+                    cut= gamma_cut,
                     path=roe_gamma)
 
-        var.addAlias('extra_clusterE', f'totalEnergyOfParticlesInList({photonList})')
-
-        #ma.rankByLowest(particleList=photonList,
-        #                variable='E_CMS',
-        #                numBest=1,
-        #                path=roe_gamma)
-        
-        #ma.variableToSignalSideExtraInfo(
-        #    photonList,
-        #    varToExtraInfo={"E_CMS":"extra_gamE"},
-        #    path=roe_gamma
-        #)
-        ma.variableToSignalSideExtraInfo(
+        ma.variableToSignalSideExtraInfo( # save photon sum info before cut on photon list
             particle_list,
-            varToExtraInfo={"extra_clusterE":"extra_ClusterE"},
+            varToExtraInfo={
+                f'totalEnergyOfParticlesInList({photonList})': 'extra_clusterE',
+                f'useCMSFrame(totalEnergyOfParticlesInList({photonList}))': 'extra_clusterE_CMS'
+            },
+            path=roe_gamma
+        )
+
+        ma.rankByHighest(particleList=photonList, 
+                        variable='E_CMS',
+                        numBest=1,
+                        path=roe_gamma,)
+        
+        ma.variableToSignalSideExtraInfo(
+            photonList,
+            varToExtraInfo={"E":"extra_gamE", "E_CMS":"extra_gamE_CMS"},
             path=roe_gamma
         )
 

@@ -674,6 +674,125 @@ class CompositeBuilder(PDFBuilder):
         return pdf_name
 
 
+class GenericPdfBuilder(PDFBuilder):
+    """
+    Build a PDF from a user-defined real-valued formula using RooGenericPdf.
+
+    Parameters are declared inline inside the formula string using bracket
+    syntax: ``name[init, min, max]`` or ``name[value]`` (fixed constant).
+    Bare names that already exist in the workspace are automatically detected
+    and appended to the argument list.
+
+    The observable (var_name) is always ``@0``; all other arguments are
+    assigned ``@1, @2, ...`` in order of first appearance in the formula.
+
+    Config parameters:
+        - formula : real-valued math expression.  Declare new fit parameters
+          inline with ``name[init, min, max]``; reference existing workspace
+          objects by their bare name.
+
+    Example:
+
+        PDFSpec("Signal", "rho_M", "generic_pdf", {"formula":
+            "A[1,0,10] * bw_re + B[0.1,-5,5] + C[1,0,10]*TMath::Cos(phase[0,0,3.14159])*bw_om_re"
+        })
+        # A, B, C, phase  -> created as new RooRealVar
+        # bw_re, bw_om_re -> looked up in workspace automatically
+
+    Notes:
+        - The formula must be real-valued; complex amplitudes must be
+          expanded into real arithmetic before use.
+        - TMath:: function names and numeric literals are ignored during
+          workspace lookup.
+        - For too complex formulas, consider defining a c++ function via gInterpreter, 
+        then calling it directly in the formula string, e.g. ``MyFunc(x, param1, param2)``.
+    """
+
+    PARAMETERS = {
+        "formula": None,   # Required
+    }
+
+    # Matches identifier immediately followed by [...] — inline declaration
+    _INLINE_PAT = re.compile(r'\b([A-Za-z_]\w*)\s*\[([^\]]+)\]')
+
+    def build(self, workspace: ROOT.RooWorkspace, var_name: str,
+              config: Dict[str, Any], pdf_name: str) -> str:
+        formula = config.get("formula")
+        if not formula:
+            raise ValueError(
+                f"GenericPdfBuilder for '{pdf_name}' requires config['formula']."
+            )
+
+        arg_list = ROOT.RooArgList()
+
+        # @0 — the main observable
+        obs = workspace.var(var_name)
+        arg_list.add(obs)
+
+        # --- Step 1: extract inline name[...] declarations ---
+        # Process in order of first appearance; skip the observable itself.
+        seen = {}   # name -> @index
+        for m in self._INLINE_PAT.finditer(formula):
+            pname, spec = m.group(1), m.group(2).strip()
+            if pname == var_name or pname in seen:
+                continue
+            existing = workspace.var(pname)
+            if not existing:
+                parts = [s.strip() for s in spec.split(',')]
+                try:
+                    nums = [float(s) for s in parts]
+                    if len(nums) == 1:
+                        ws_str = f"{pname}[{nums[0]}]"
+                    else:
+                        ws_str = self._format_param(pname, tuple(nums) + (pname,), pdf_name)
+                except ValueError:
+                    # spec contains non-numeric expressions (e.g. TMath::Pi())
+                    # pass directly to workspace.factory as-is
+                    ws_str = f"{pname}[{spec}]"
+                workspace.factory(ws_str)
+                existing = workspace.var(pname)
+                if existing is None:
+                    raise RuntimeError(
+                        f"GenericPdfBuilder: failed to create '{pname}' via '{ws_str}'."
+                    )
+            seen[pname] = arg_list.getSize()
+            arg_list.add(existing)
+
+        # --- Step 2: strip [...] specs to get clean formula ---
+        clean = self._INLINE_PAT.sub(r'\1', formula)
+
+        # --- Step 3: auto-detect bare names that exist in the workspace ---
+        # First collect all tokens that appear as part of a qualified Namespace::Name
+        # expression — these are C++ library calls (TMath::Power, TComplex::I, etc.)
+        # and must never be looked up as workspace variables.
+        qualified = set()
+        for ns, fn in re.findall(r'\b([A-Za-z_]\w*)\s*::\s*([A-Za-z_]\w*)', clean):
+            qualified.add(ns)
+            qualified.add(fn)
+
+        for m in re.finditer(r'\b([A-Za-z_]\w*)\b', clean):
+            token = m.group(1)
+            if token == var_name or token in seen or token in qualified:
+                continue
+            # skip function calls: identifier immediately followed by '('
+            after = clean[m.end():].lstrip()
+            if after.startswith('('):
+                continue
+            v = workspace.var(token) or workspace.function(token)
+            if v is not None:
+                seen[token] = arg_list.getSize()
+                arg_list.add(v)
+
+        # --- Step 4: replace all known names with @N ---
+        for pname, idx in seen.items():
+            clean = re.sub(rf'\b{re.escape(pname)}\b', f'@{idx}', clean)
+
+        print(f"[GenericPdfBuilder] {pdf_name}: formula = {clean}")
+        pdf = ROOT.RooGenericPdf(pdf_name, pdf_name, clean, arg_list)
+        getattr(workspace, "import")(pdf, ROOT.RooFit.RecycleConflictNodes())
+        return pdf_name
+
+
 # template fit 
 class TemplateFitBuilder(PDFBuilder):
     """
@@ -731,7 +850,7 @@ class TemplateFitBuilder(PDFBuilder):
         # Create FIT_UTILS instance and use handle_dataset to create MC dataset
         from .utils.handle_fit_io import FIT_IO
         var_config = [(var_name, var.getMin(), var.getMax())]
-        tools = FIT_IO(log_file=None, var_config=var_config)
+        tools = FIT_IO(log_file=None, var_config=var_config) # ignore type of var_config
         
         # Determine if we need binned dataset
         binned = config.get("binned", self.PARAMETERS["binned"])
@@ -740,11 +859,10 @@ class TemplateFitBuilder(PDFBuilder):
         mc_dataset = tools.handle_dataset(
             input_tree=tree,
             workspace=temp_ws,  # Use temporary workspace to avoid conflicts
-            branches_name=[var_name],  # Assume MC tree has same variable name
+            target_brs=[var_name],  # Assume MC tree has same variable name
             binned_fit=binned,
             hist_bins=config.get("nbins", self.PARAMETERS["nbins"]),
             weight_branch=params["weight_branch"],
-            save_rootFile=False
         )
         
         # Import dataset to workspace
@@ -798,6 +916,7 @@ class PDFBuilderRegistry:
         self.register("exponential", ExponentialBuilder())
         self.register("flat", FlatBuilder())
         self.register("composite", CompositeBuilder())
+        self.register("generic_pdf", GenericPdfBuilder())
         self.register("template", TemplateFitBuilder())
     
     def register(self, name: str, builder: PDFBuilder):
@@ -860,5 +979,11 @@ version: 3.2
 - The builder reuses `ModelParser` for nested operation resolution and creates
     the top-level PDF with the requested PDF name.
 date  : 2026-03-26
+author: wang zheng
+
+version: 3.3
+- Added `GenericPdfBuilder` for fully user-defined formulas using RooGenericPdf.
+
+date : 2026-06-12
 author: wang zheng
 """

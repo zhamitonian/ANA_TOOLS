@@ -73,12 +73,13 @@ class FIT_IO():
 
     def handle_dataset(self, input_tree: ROOT.TTree, 
                    workspace: ROOT.RooWorkspace, 
-                   target_brs: Optional[List[str]] = None,  # to handle vector branches
+                   target_brs: Optional[List[str]] = None, 
                    binned_fit: bool = False,
                    hist_bins: int = 100,
                    weight_branch : Optional[str] = None) -> Union[ROOT.RooDataSet, ROOT.RooDataHist]:
         """
         Create RooDataSet (unbinned) or RooDataHist (binned) from TTree
+        Only support 1D fit scalar/vector branches and 2D scalar branches for now
         
         Args:
             input_tree: ROOT TTree object

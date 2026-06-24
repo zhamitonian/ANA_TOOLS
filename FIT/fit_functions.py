@@ -1282,3 +1282,113 @@ def fit_rho00(hist: ROOT.TH1, plot_path: str, if_error_band:Optional[bool]=False
     
     return (rho00_value, rho00_error)
 
+
+def fit_rerho1m1(hist: ROOT.TH1, plot_path: str, if_error_band: Optional[bool] = False, extra_legend: Optional[str] = None) -> tuple:
+    """
+    Fits folded helicity phi distribution to extract Re(rho_{1,-1}).
+
+    The angular distribution is: dN/d(phi_fold) proportional to 1 - 2*cos(2*phi_fold)*Re(rho_{1,-1})
+    where phi_fold is the quadrant-folded helicity angle in [0, pi/2].
+    For unpolarized (spin-0), Re(rho_{1,-1}) should equal 0.
+
+    Args:
+        hist: ROOT TH1 histogram containing folded helicity phi distribution (phi in [0, pi/2])
+        plot_path: File path to save the fit plot
+        if_error_band: Whether to draw 1-sigma error band
+        extra_legend: Extra legend entries separated by ";"
+
+    Returns:
+        tuple: (rerho1m1_value, rerho1m1_error)
+    """
+    # dN/dphi_fold = N0 * (1 - 2*cos(2*x)*[1])
+    # [0] = normalization, [1] = Re(rho_{1,-1}), physical range: [-0.5, 0.5]
+    angular_dist = ROOT.TF1("rerho1m1_dist", "[0]*(1 - 2*cos(2*x)*[1])", 0, ROOT.TMath.Pi() / 2, 2)
+
+    hist_integral = hist.Integral()
+    angular_dist.SetParameter(0, hist_integral * 4.0 / ROOT.TMath.Pi())  # rough normalization
+    angular_dist.SetParameter(1, 0.0)   # start from unpolarized hypothesis
+
+    angular_dist.SetParLimits(0, 0, hist.GetMaximum() * 4.0)
+    angular_dist.SetParLimits(1, -0.5, 0.5)  # physical range for Re(rho_{1,-1})
+
+    angular_dist.SetParName(0, "N0")
+    angular_dist.SetParName(1, "ReRho1m1")
+
+    fit_result = hist.Fit(angular_dist, "RSMEQ")
+
+    if fit_result.Status() != 0 or not fit_result.IsValid():
+        for init_val in [0.1, -0.1, 0.3, -0.3]:
+            angular_dist.SetParameter(1, init_val)
+            fit_result = hist.Fit(angular_dist, "RSMEQ")
+            if fit_result.Status() == 0 and fit_result.IsValid():
+                break
+
+    rerho1m1_value = angular_dist.GetParameter(1)
+    rerho1m1_error = angular_dist.GetParError(1)
+    chi2 = angular_dist.GetChisquare()
+    ndf = angular_dist.GetNDF()
+
+    def plot_fit():
+        ROOT.gStyle.SetOptStat(0)
+        ROOT.gStyle.SetOptFit(0)
+
+        c = ROOT.TCanvas("c_rerho1m1_fit", "ReRho1m1 Fit", 800, 600)
+        c.SetLeftMargin(0.15)
+        c.SetBottomMargin(0.14)
+        c.SetRightMargin(0.05)
+        c.SetTopMargin(0.1)
+        c.SetGridx(True)
+        c.SetGridy(True)
+
+        hist.SetMarkerStyle(20)
+        hist.SetMarkerColor(ROOT.kBlack)
+        hist.SetLineColor(ROOT.kBlack)
+        hist.SetTitle("")
+        hist.GetXaxis().SetTitleSize(0.045)
+        hist.GetYaxis().SetTitleSize(0.045)
+        hist.GetXaxis().SetLabelSize(0.04)
+        hist.GetYaxis().SetLabelSize(0.04)
+        hist.GetXaxis().SetTitle("#phi_{fold} (rad)")
+        hist.GetYaxis().SetTitle("Candidates")
+
+        max_val = hist.GetMaximum()
+        min_val = hist.GetMinimum()
+        hist.SetMinimum(min_val * 0.5)
+        hist.SetMaximum(max_val * 1.5)
+        hist.Draw("PE")
+
+        angular_dist.SetLineColor(ROOT.kRed)
+        angular_dist.SetLineWidth(3)
+        angular_dist.Draw("SAME")
+
+        leg = ROOT.TLegend(0.55, 0.7, 0.92, 0.90)
+        leg.SetBorderSize(0)
+        leg.SetFillStyle(0)
+        leg.SetFillColor(0)
+        leg.SetTextSize(0.04)
+        leg.AddEntry(0, f"Re#rho_{{1,-1}} = {rerho1m1_value:.3f} #pm {rerho1m1_error:.3f}", "")
+        leg.AddEntry(0, f"#chi^{{2}}/ndf = {chi2:.1f}/{ndf:.0f} = {chi2/ndf:.1f}", "")
+
+        if extra_legend is not None:
+            for entry in extra_legend.split(";"):
+                leg.AddEntry(0, entry, "")
+
+        if if_error_band:
+            n_points = 100
+            error_band = ROOT.TGraphErrors(n_points)
+            for i in range(n_points):
+                x = i * (ROOT.TMath.Pi() / 2) / (n_points - 1)
+                error_band.SetPoint(i, x, 0)
+            fitter = ROOT.TVirtualFitter.GetFitter()
+            fitter.GetConfidenceIntervals(error_band, 0.683)
+            error_band.SetFillColor(ROOT.kRed - 9)
+            error_band.SetFillStyle(3001)
+            error_band.Draw("3 SAME")
+            leg.AddEntry(error_band, "1 #sigma error band", "f")
+
+        leg.Draw("SAME")
+        c.SaveAs(plot_path)
+
+    plot_fit()
+
+    return (rerho1m1_value, rerho1m1_error)

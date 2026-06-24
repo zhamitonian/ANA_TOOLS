@@ -388,7 +388,7 @@ def style_draw(
     height = (0.16 * num_stats + 0.05 * num) * sqrt(area_scale)
 
     if legend_position == 0:  # left - anchor at top-left
-        left = 0.13
+        left = 0.16
         right = left + width
     elif legend_position == 2:  # right - anchor at top-right
         right = 0.13 + 0.3 * 2 + 0.2

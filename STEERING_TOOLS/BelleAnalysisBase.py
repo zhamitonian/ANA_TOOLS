@@ -54,8 +54,6 @@ class BelleAnalysisBase:
         self.command_line_options = {}
         print(f"BelleAnalysisBase initialized with belle_version: {self.belle_version}, analysis_mode: {self.analysis_mode}")
 
-        self.setup_environment()
-
     @staticmethod
     def get_random_id(size=6, chars=string.ascii_uppercase + string.digits):
         """Generate random ID for unique particle list names"""
@@ -197,7 +195,7 @@ class BelleAnalysisBase:
             #if self.is_signal_mc:
             convertBelleMdstToBelleIIMdst(
                 input_file, 
-                enableNisKsFinder=False, 
+                enableNisKsFinder=True,
                 enableEvtcls=True, 
                 HadronA=True, 
                 HadronB=True, 
@@ -235,7 +233,7 @@ class BelleAnalysisBase:
         var.addAlias('px_CMS', 'useCMSFrame(px)')
         var.addAlias('py_CMS', 'useCMSFrame(py)')
         var.addAlias('pz_CMS', 'useCMSFrame(pz)')
-        #var.addAlias('theta_CMS', 'useCMSFrame(cosTheta)')
+        var.addAlias('cosTheta_CMS', 'useCMSFrame(cosTheta)')
         var.addAlias('theta_CMS', 'useCMSFrame(theta)')
         var.addAlias('phi_CMS', 'useCMSFrame(phi)')
         
@@ -329,7 +327,8 @@ class BelleAnalysisBase:
 
         # Add daughter variables
         for p in particles:
-            p.variables = vu.create_aliases(['E_CMS', 'pt_CMS' ,'E', 'p', 'px', 'py', 'pz' , 'M' ,'theta'], firstP.get_daughter_access_string(p,"{variable}"),p.prefix)
+            #p.variables = vu.create_aliases(['E_CMS', 'pt_CMS' ,'E', 'p', 'px', 'py', 'pz' , 'M' ,'theta'], firstP.get_daughter_access_string(p,"{variable}"),p.prefix)
+            p.variables = vu.create_aliases(['E_CMS', 'p_CMS', 'cosTheta_CMS', 'phi_CMS'], firstP.get_daughter_access_string(p,"{variable}"),p.prefix)
             if p.name == "vpho":
                 p.variables += vu.create_aliases(['m2Recoil', 'pRecoilTheta'], firstP.get_daughter_access_string(p,"{variable}"),p.prefix)
             if p.name in ["K+", "K-", "pi+", "pi-"]:
