@@ -85,7 +85,7 @@ class BelleMCProcessor:
         root_file = os.path.join(root_path, f"{job_name}.root")
         log_file = os.path.join(log_path, f"{job_name}.log")
         
-        cmd = f'bsub -q s -oo {log_file} basf2 {script_path} belle1 gMC "{url}" {root_file}'
+        cmd = f'bsub -q s -oo {log_file} basf2 {script_path} gMC belle1 "{url}" {root_file}'
         print(f"Submitting: {cmd}")
         subprocess.run(cmd, shell=True, check=True)
     

@@ -21,6 +21,7 @@ from variables import variables as var
 import string
 import random
 from .DecayString_parser import parse_decay_chain
+from basf2 import B2INFO, B2ERROR, B2DEBUG, B2WARNING
 
 class BelleAnalysisBase:
     """
@@ -47,7 +48,7 @@ class BelleAnalysisBase:
         
         self.input_file: str = ""
         self.output_file: str = ""
-        print(f"BelleAnalysisBase initialized with belle_version: {self.belle_version}, analysis_mode: {self.analysis_mode}")
+        B2WARNING(f"BelleAnalysisBase initialized with belle_version: {self.belle_version}, analysis_mode: {self.analysis_mode}")
     
     def _help_var_setting(self):
         self.is_belle1 = (self.belle_version == 'belle1')
@@ -116,7 +117,7 @@ class BelleAnalysisBase:
             self.output_file = output_file
 
         # Apply environment changes if needed
-        print(f"Updating BelleAnalysisBase to belle_version={self.belle_version}, analysis_mode={self.analysis_mode}")
+        B2WARNING(f"Updating BelleAnalysisBase to belle_version={self.belle_version}, analysis_mode={self.analysis_mode}")
 
         return belle_version, analysis_mode, input_file, output_file
 
@@ -136,7 +137,7 @@ class BelleAnalysisBase:
  
             b2.conditions.prepend_globaltag('Legacy_CollisionAxisCMS_Belle')
             b2.conditions.prepend_globaltag('analysis_b2bii')
-            print("Environment set for Belle I analysis")
+            B2INFO("Environment set for Belle I analysis")
             return True
         return False
     
@@ -277,6 +278,7 @@ class BelleAnalysisBase:
         # Reconstruct decay chain (bottom-up)
         for p in reversed(particles):
             if p.get_decay_string():
+                B2WARNING(f"MC truth reconstructing decay: {p.get_decay_string()}")
                 ma.reconstructDecay(p.get_decay_string(), ' ', path=path)
 
         # use dM to avoid miscombination
@@ -293,7 +295,7 @@ class BelleAnalysisBase:
 
         # Add daughter variables
         for p in particles:
-            p.variables = vu.create_aliases(['E_CMS', 'p_CMS', 'cosTheta_CMS', 'phi_CMS'], firstP.get_daughter_access_string(p,"{variable}"),p.prefix)
+            p.variables = vu.create_aliases(['E_CMS', 'p_CMS', 'cosTheta_CMS', 'phi_CMS', 'px_CMS', 'py_CMS', 'pz_CMS'], firstP.get_daughter_access_string(p,"{variable}"),p.prefix)
             if p.name == "vpho":
                 p.variables += vu.create_aliases(['m2Recoil', 'pRecoilTheta'], firstP.get_daughter_access_string(p,"{variable}"),p.prefix)
             if p.name in ["K+", "K-", "pi+", "pi-"]:

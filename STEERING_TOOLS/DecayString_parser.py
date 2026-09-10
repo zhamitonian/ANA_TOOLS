@@ -1,6 +1,7 @@
 """
 parser Basf2 decay string
 """
+from basf2 import B2INFO, B2ERROR, B2DEBUG, B2WARNING
 
 """
 version 1.0.0
@@ -258,7 +259,7 @@ def parse_decay_chain(decay_string):
             
             # If this particle already has a different parent, warn about it
             if parent and current_parent.mother and current_parent.mother != parent:
-                print(f"Warning: {parent_full_name} already has parent {current_parent.mother.list_name}")
+                B2WARNING(f"{parent_full_name} already has parent {current_parent.mother.list_name}")
             
             # Connect to parent if provided
             if parent and current_parent.mother is None:

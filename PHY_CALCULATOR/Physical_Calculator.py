@@ -3,7 +3,7 @@ import os
 import sys
 import numpy as np
 import math
-from typing import Dict, List, Tuple, Union, Optional
+from typing import Dict, List, Tuple, Union, Optional, Callable
 
 class PhysicsCalculator:
     def __init__(self, output_rootFile: str):
@@ -107,8 +107,8 @@ class PhysicsCalculator:
     ''' 
     would cause error at the margin we generate MC , temporarily not use it
     def calculateEfficiency(self, rootFile_config: Dict[str, Tuple[str, str]], 
-                            process_func:Optional[callable] = None, 
-                            truth_varDefine:Optional[callable] = None) -> ROOT.TH1F:
+                            process_func:Optional[Callable] = None, 
+                            truth_varDefine:Optional[Callable] = None) -> ROOT.TH1F:
         """
         Calculate and save efficiency histogram from truth and reconstruction histograms
         
@@ -169,8 +169,8 @@ class PhysicsCalculator:
     '''
 
     def calculateEfficiency(self, rootFile_config: Dict[str, Tuple[str, str]], 
-                    process_func:Optional[callable] = None, 
-                    truth_varDefine:Optional[callable] = None,
+                    process_func:Optional[Callable] = None, 
+                    truth_varDefine:Optional[Callable] = None,
                     weight = None) -> ROOT.TH1F:
         """
         Calculate and save efficiency histogram from truth and reconstruction histograms
@@ -264,7 +264,7 @@ class PhysicsCalculator:
             h_efficiency.SetBinError(i, err)
         
         h_efficiency.GetYaxis().SetTitle("#varepsilon")
-        h_efficiency.GetXaxis().SetTitle("#sqrt{s'} [GeV]")
+        h_efficiency.GetXaxis().SetTitle("#sqrt{s'} (GeV)")
         
         # 保存结果
         self.saveHist(h_efficiency, "efficiency")
@@ -274,8 +274,10 @@ class PhysicsCalculator:
         
     def divide_hist(self, h_numerator: ROOT.TH1, h_denominator: ROOT.TH1, name: str = "divided") -> ROOT.TH1:
         """
-        Divide two histograms bin-by-bin and return the result.
-
+        Divide two histograms bin-by-bin with proper error propagation.
+        
+        For f = A/B, uses: (ferr/f)² = (A_err/A)² + (B_err/B)²
+        
         Parameters:
         -----------
         h_numerator : ROOT.TH1
@@ -288,13 +290,21 @@ class PhysicsCalculator:
         Returns:
         --------
         ROOT.TH1
-            Resulting histogram after division
+            Resulting histogram after division with propagated errors
         """
+        # Ensure input histograms have error structure initialized
+        h_numerator.Sumw2()
+        h_denominator.Sumw2()
+        
         h_result = h_numerator.Clone(name)
         h_result.Sumw2()
+        
+        # Use "B" option for Binomial/proper ratio error propagation
         h_result.Divide(h_numerator, h_denominator, 1, 1, "B")
+        
         h_result.GetYaxis().SetTitle("Ratio")
         h_result.GetXaxis().SetTitle(h_denominator.GetXaxis().GetTitle())
+        
         return h_result
     
     def getNsigHist(self, nsig_txt: str) -> Optional[ROOT.TH1F]:
@@ -315,21 +325,31 @@ class PhysicsCalculator:
             print(f"Error: Unable to open file {nsig_txt}")
             return None
         
-        # Read data from file
-        xValues, xErrors, yValues, yErrors = [], [], [], []
-        with open(nsig_txt, 'r') as file:
-            for line in file:
-                try:
-                    x, xErr, y, yErr, other = map(float, line.split())
-                    xValues.append(x)
-                    xErrors.append(xErr)
-                    yValues.append(y)
-                    yErrors.append(yErr)
-                except ValueError:
-                    print(f"Error: Invalid line format in file {nsig_txt}")
-        
         # Create histogram
         h_nsig = ROOT.TH1F("nsig", "Nsig;#sqrt{s'}[GeV];Nsig", self.nbin_tot, self.bins)
+
+        xValues, xErrors, yValues, yErrors = [], [], [], []
+
+        if nsig_txt.endswith('.csv'):
+           import pandas as pd
+           df = pd.read_csv(nsig_txt)
+           for i,row in df.iterrows():
+                xValues.append(row.iloc[0])
+                xErrors.append(row.iloc[1])
+                yValues.append(row.iloc[2])
+                yErrors.append(row.iloc[3])
+        else :
+            # Read data from file
+            with open(nsig_txt, 'r') as file:
+                for i,line in file:
+                    try:
+                        x, xErr, y, yErr, other = map(float, line.split())
+                        xValues.append(x)
+                        xErrors.append(xErr)
+                        yValues.append(y)
+                        yErrors.append(yErr)
+                    except ValueError:
+                        print(f"Error: Invalid line format in file {nsig_txt}")
         
         # Fill histogram with data
         for i in range(self.nbin_tot):

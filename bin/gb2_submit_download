@@ -43,8 +43,8 @@ def download_data(exp_name, grid_usrname, project_name):
     time.sleep(1)
     
     print(f"Downloading from KEK to local... Data {exp_name}")
-    # Schedule the download command to run 2 hour later using 'at'
-    cmd_local = f"echo 'gb2_ds_get --se KEK-DISK-TMP-SE {remote_path} -f' | at now + 2 hour"
+    # Schedule the download command to run 0.5 hour later using 'at'
+    cmd_local = f"echo 'gb2_ds_get --se KEK-DISK-TMP-SE {remote_path} -f' | at now + 1 hour"
     subprocess.run(cmd_local, shell=True, check=True)
     time.sleep(1)
 

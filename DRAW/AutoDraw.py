@@ -183,6 +183,7 @@ def style_draw(
     ROOT.gStyle.SetLegendFillColor(0) 
     ROOT.gStyle.SetLabelFont(22,"XYZ")
     ROOT.gStyle.SetTitleFont(22,"XYZ")
+    ROOT.gStyle.SetStripDecimals(False)
     
     # Ensure we have enough styles for all histograms
     styles = ensure_styles(num, styles)
@@ -382,10 +383,12 @@ def style_draw(
     num_stats = num if show_stats else 0
 
     area_scale = 1.25
+    #area_scale = 1
 
     top = 0.9 - 0.16 * num_stats
     width = 0.2 * sqrt(area_scale)
-    height = (0.16 * num_stats + 0.05 * num) * sqrt(area_scale)
+    #height = (0.16 * num_stats + 0.05 * num) * sqrt(area_scale)
+    height = (0.16 * num_stats + 0.04 * num) * sqrt(area_scale)
 
     if legend_position == 0:  # left - anchor at top-left
         left = 0.16
