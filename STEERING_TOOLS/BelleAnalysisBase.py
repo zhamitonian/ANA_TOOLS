@@ -6,7 +6,7 @@
 # Handles differences between Belle I and Belle II
 ###################################################
 
-## version 3.0.0
+## version 3.1.0
 ## author: wangz
 ## date: 2026-06-25
 
@@ -249,15 +249,61 @@ class BelleAnalysisBase:
         var.addAlias('sttscale', 'L1Prescale(stt)')
 
 
-    def setup_mc_truth_general(self, path, decay_chain , output_file=None):
+    # Default truth variables per selector.
+    # Selectors: "all", "final" (no daughters), "composite" (has daughters),
+    # a particle name (e.g. "K+"), or a particle prefix (distinguishes same-name particles).
+    DEFAULT_TRUTH_VARIABLES = {
+        "all": ['E_CMS', 'p_CMS', 'cosTheta_CMS', 'phi_CMS', 'px_CMS', 'py_CMS', 'pz_CMS'],
+        "vpho": ['m2Recoil', 'pRecoilTheta'],
+        "K+": ['dr', 'dz'],
+        "K-": ['dr', 'dz'],
+        "pi+": ['dr', 'dz'],
+        "pi-": ['dr', 'dz'],
+    }
+
+    @staticmethod
+    def _select_truth_variables(p, spec):
+        """Return the de-duplicated variable names of particle p matched by the selectors in spec."""
+        names = []
+        for selector, val in spec.items():
+            matched = (selector == "all"
+                       or (selector == "final" and not p.daughters)
+                       or (selector == "composite" and bool(p.daughters))
+                       or selector in (p.name, p.prefix))
+            if matched:
+                names += list(val(p) if callable(val) else val)
+        return list(dict.fromkeys(names))
+
+    def setup_mc_truth_general(self, path, decay_chain, output_file=None,
+                               variables=None, extra_variables=None):
         """
         Set up MC truth information with configurable decay structure
         
         Args:
             path: Analysis path to add modules to
             output_file: Output file path for ntuple
-            decay_structure: Dictionary with decay structure information (optional)
-                Default structure is for phi K K analysis
+            decay_chain: Decay chain string parsed by parse_decay_chain
+            variables: Dict {selector: variable list (or callable)} that replaces
+                DEFAULT_TRUTH_VARIABLES entirely (None: use the defaults).
+                Selector (dict key) decides which particles of the decay chain get the variables:
+                    "all"       every particle
+                    "final"     particles without daughters (final state)
+                    "composite" particles with daughters
+                    "K+", "phi" particle name, matches all particles with this name
+                    p.prefix    particle prefix, matches one specific particle
+                                (use it to distinguish same-name particles)
+                Value is either a list of basf2 variable names, or a callable
+                f(p) -> list that receives the particle info object, e.g.
+                    lambda p: ['dr'] if p.mother.name == 'phi' else []
+                A particle matched by several selectors gets the union (duplicates removed).
+                Example:
+                    variables={"all": ['E_CMS', 'p_CMS'],
+                               "K+": ['dr', 'dz'],
+                               "final": ['charge']}
+            extra_variables: Same format as variables, merged on top of the
+                (default or user) variables. A list is appended to the list of the
+                same selector; a callable replaces it.
+                Example: extra_variables={"phi": ['M'], "final": ['theta']}
         
         Returns:
             List of truth variable names
@@ -293,13 +339,18 @@ class BelleAnalysisBase:
 
         ma.rankByLowest(firstP.list_name, 'dM_sum', numBest= 1 , path=path)
 
-        # Add daughter variables
+        # Build the variable spec: defaults (or user override) + extras
+        spec = {k: v for k, v in (DEFAULT_TRUTH_VARIABLES if variables is None else variables).items()}
+        for key, val in (extra_variables or {}).items():
+            if callable(val) or callable(spec.get(key)):
+                spec[key] = val
+            else:
+                spec[key] = list(spec.get(key, [])) + list(val)
+
+        # Add daughter variables selected according to the decay chain
         for p in particles:
-            p.variables = vu.create_aliases(['E_CMS', 'p_CMS', 'cosTheta_CMS', 'phi_CMS', 'px_CMS', 'py_CMS', 'pz_CMS'], firstP.get_daughter_access_string(p,"{variable}"),p.prefix)
-            if p.name == "vpho":
-                p.variables += vu.create_aliases(['m2Recoil', 'pRecoilTheta'], firstP.get_daughter_access_string(p,"{variable}"),p.prefix)
-            if p.name in ["K+", "K-", "pi+", "pi-"]:
-                p.variables += vu.create_aliases(['dr','dz' ], firstP.get_daughter_access_string(p,"{variable}"),p.prefix)
+            names = self._select_truth_variables(p, spec)
+            p.variables = vu.create_aliases(names, firstP.get_daughter_access_string(p, "{variable}"), p.prefix)
 
         # Combine all truth variables
         truth_vars =  []
@@ -328,5 +379,7 @@ v3.0.0
 
 core principles: this is just a helper class, physics analysis part shall not be included here
 
-
+v3.1.0
+- 2026-10-10
+- setup_mc_truth_general: add support for specifying custom truth variables for each particle type 
 """
