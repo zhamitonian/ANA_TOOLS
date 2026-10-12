@@ -2,7 +2,7 @@
 
 """
 gbasf2 exp Data , generic MC submission and download script
-version : 2.0,0
+version : 2.1,0
 Date    : 2026-05-25
 Author  : wangzheng
 """
@@ -14,6 +14,7 @@ from datetime import datetime
 import argparse
 from pathlib import Path
 import yaml
+import tarfile
 
 def submit_job(exp_name, input_path, project_name, basf2_version, script_path, sandbox_files):
     """Submit job to grid"""
@@ -48,6 +49,44 @@ def download_data(exp_name, grid_usrname, project_name):
     subprocess.run(cmd_local, shell=True, check=True)
     time.sleep(1)
 
+def prepare_sandbox_files(sandbox_files):
+    """Convert sandbox directories to tarballs; pass files through unchanged."""
+    if not sandbox_files:
+        return []
+
+    prepared_files = []
+    for item in sandbox_files.split(","):
+        item = item.strip()
+        if not item:
+            raise ValueError("Sandbox path must not be empty")
+
+        path = Path(item).expanduser()
+
+        if path.is_dir():
+            # Resolve the source to follow a top-level symlink, but retain the
+            # user-provided directory name as the archive's top-level folder.
+            source = path.resolve(strict=True)
+            tarball = Path.cwd() / f"{path.name}.tar.gz"
+
+            with tarfile.open(tarball, "w:gz") as archive:
+                archive.add(
+                    source,
+                    arcname=path.name,
+                    filter=lambda member: ( # avoid including __pycache__ and .pyc files
+                        None
+                        if "__pycache__" in Path(member.name).parts
+                        or member.name.endswith(".pyc")
+                        else member
+                    ),
+                )
+
+            prepared_files.append(tarball.name)
+        elif path.is_file():
+            prepared_files.append(str(path))
+        else:
+            raise FileNotFoundError(f"Sandbox path not found: {path}")
+
+    return prepared_files
 
 def main():
     current_date = datetime.now().strftime("%d%b%y")  # Default to current date in DDMMMYY format
@@ -59,20 +98,32 @@ def main():
     parser.add_argument("--config","-c", default="./project_config.yaml", help="Path to the YAML config file")
     parser.add_argument("--date", help="Date in format DDMMMYY (e.g., 25Feb25)", default=current_date)
     parser.add_argument("--number", type=int, choices=range(1, 10), default=1, help="Batch number (1-9)")
-    parser.add_argument("--sandbox", help="Additional sandbox files to include (comma-separated)", default = "./STEERING_TOOLS/")
+    parser.add_argument(
+        "--sandbox",
+        help=(
+            "Supplemental sandbox paths, comma-separated. "
+            "Directories are archived in the current working directory (overwriting an existing archive); "
+            "files are passed directly to gbasf2."
+        ),
+        default= "/gpfs/home/belle2/wangz/Work/ANA_TOOLS/STEERING_TOOLS",
+    )
     
     args = parser.parse_args()
     
     # Validate script path when in submit mode
     if args.mode == "submit" and not args.script:
         parser.error("--script is required when mode is 'submit'")
-    
+
     # Validate date format
     try:
         datetime.strptime(args.date, "%d%b%y")
     except ValueError:
         print("Error: Invalid date format or range. Use DDMMMYY format (e.g., 25Feb25)")
         sys.exit(1)
+
+    # Prepare sandbox files
+    if args.sandbox and args.mode == "submit":
+        sandbox_files = ",".join(prepare_sandbox_files(args.sandbox))
 
     # Load config
     config_path = Path(args.config)
@@ -93,7 +144,7 @@ def main():
     for exp_name, input_path in experiment_catalog.items():
         if args.mode == "submit":
             submit_job(exp_name, input_path, project_name, config["basf2_version"],
-                       args.script, args.sandbox)
+                       args.script, sandbox_files)
         elif args.mode == "download":
             download_data(exp_name, config["grid_usrname"], project_name)
 
@@ -108,5 +159,9 @@ initial version,
 v2.0.0
 - seprate config and work part
 date : 2026-05-25
+
+v2.1.0
+- update sandbox handling to include prepared tarball files to account the gbasf2 update
+date : 2026-10-12
 
 """
