@@ -382,4 +382,5 @@ core principles: this is just a helper class, physics analysis part shall not be
 v3.1.0
 - 2026-10-10
 - setup_mc_truth_general: add support for specifying custom truth variables for each particle type 
+
 """
