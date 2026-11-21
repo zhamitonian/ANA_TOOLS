@@ -6,15 +6,16 @@
 # Handles differences between Belle I and Belle II
 ###################################################
 
-## version 3.1.0
+## version 3.2.0
 ## author: wangz
-## date: 2026-06-25
+## date: 2026-11-21
 
 
 import basf2 as b2
 import modularAnalysis as ma
 import variables.utils as vu
 import variables.collections as vc
+import csv
 import os
 import sys
 from variables import variables as var
@@ -22,6 +23,18 @@ import string
 import random
 from .DecayString_parser import parse_decay_chain
 from basf2 import B2INFO, B2ERROR, B2DEBUG, B2WARNING
+
+
+class _EventCutflowCounter(b2.Module):
+    def __init__(self, stage):
+        super().__init__()
+        self.stage = stage
+        self.count = 0
+        self.set_name(f"Cutflow_{stage}")
+
+    def event(self):
+        self.count += 1
+
 
 class BelleAnalysisBase:
     """
@@ -48,6 +61,8 @@ class BelleAnalysisBase:
         
         self.input_file: str = ""
         self.output_file: str = ""
+        self.cutflow_enabled = False
+        self._cutflow_counters = []
         B2WARNING(f"BelleAnalysisBase initialized with belle_version: {self.belle_version}, analysis_mode: {self.analysis_mode}")
     
     def _help_var_setting(self):
@@ -84,12 +99,18 @@ class BelleAnalysisBase:
         parser.add_argument('version', nargs='?', choices=['belle1', 'belle2'], default=None, help = "Belle version: belle1, belle2")
         parser.add_argument('input', nargs='?', default=None, help = "Input filename")
         parser.add_argument('output', nargs='?', default=None, help = "Output filename")
+        parser.add_argument('--cutflow', action='store_true',
+                            help="Write an event-level cutflow CSV")
 
         args = parser.parse_args()
 
         # If user didn't provide any positional args, return defaults
-        if args.mode is None and args.version is None and args.input is None and args.output is None:
+        if (args.mode is None and args.version is None and args.input is None
+                and args.output is None and not args.cutflow):
+            self.cutflow_enabled = False
             return self.belle_version, self.analysis_mode, (self.input_file or None), (self.output_file or None)
+
+        self.cutflow_enabled = args.cutflow
 
         # Defaults from object
         belle_version = self.belle_version
@@ -120,6 +141,50 @@ class BelleAnalysisBase:
         B2WARNING(f"Updating BelleAnalysisBase to belle_version={self.belle_version}, analysis_mode={self.analysis_mode}")
 
         return belle_version, analysis_mode, input_file, output_file
+
+    def add_event_cutflow_counter(self, path, stage):
+        """Count events reaching this point in the path when cutflow is enabled."""
+        if not self.cutflow_enabled:
+            return
+
+        counter = _EventCutflowCounter(stage)
+        path.add_module(counter)
+        self._cutflow_counters.append(counter)
+
+    def write_cutflow(self, output_file=None):
+        """Write registered event counts and efficiencies to a CSV file."""
+        if not self.cutflow_enabled:
+            return
+        if not self._cutflow_counters:
+            B2WARNING("Cutflow is enabled, but no event counters were registered")
+            return
+
+        if output_file is None:
+            output_name = os.path.splitext(os.path.basename(self.output_file or "analysis.root"))[0]
+            output_file = os.path.join("cutflow", output_name, "event_cutflow.csv")
+
+        output_dir = os.path.dirname(output_file)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+
+        total_events = self._cutflow_counters[0].count
+        previous_count = None
+        with open(output_file, "w", newline="") as csv_file:
+            writer = csv.writer(csv_file)
+            writer.writerow(["stage", "events", "step_efficiency", "total_efficiency"])
+
+            for counter in self._cutflow_counters:
+                step_efficiency = counter.count / previous_count if previous_count else ""
+                total_efficiency = counter.count / total_events if total_events else ""
+                writer.writerow([
+                    counter.stage,
+                    counter.count,
+                    step_efficiency,
+                    total_efficiency,
+                ])
+                previous_count = counter.count
+
+        B2INFO(f"Event cutflow written to {output_file}")
 
     def setup_environment(self):
         """Set up environment variables and conditions for the appropriate Belle experiment"""
@@ -382,5 +447,9 @@ core principles: this is just a helper class, physics analysis part shall not be
 v3.1.0
 - 2026-10-10
 - setup_mc_truth_general: add support for specifying custom truth variables for each particle type 
+
+v3.2.0
+- 2026-11-21
+- add cut flow module
 
 """
