@@ -6,9 +6,9 @@
 # Handles differences between Belle I and Belle II
 ###################################################
 
-## version 3.2.0
+## version 3.2.1
 ## author: wangz
-## date: 2026-11-21
+## date: 2026-11-23
 
 
 import basf2 as b2
@@ -34,6 +34,14 @@ class _EventCutflowCounter(b2.Module):
 
     def event(self):
         self.count += 1
+
+
+class _RequireFixMdstResult(b2.Module):
+    def event(self):
+        from ROOT import Belle2
+        info = Belle2.PyStoreObj("EventExtraInfo")
+        if not info.isValid() or not info.hasExtraInfo("FixMdstResult"):
+            b2.B2FATAL("FixMdstResult is missing; cannot apply the Belle I skim")
 
 
 class BelleAnalysisBase:
@@ -206,13 +214,17 @@ class BelleAnalysisBase:
             return True
         return False
     
-    def setup_IO(self, path, input_file=None,output_file=None):
+    def setup_IO(self, path, input_file=None, output_file=None,
+                 preserve_pre_skim_truth=False):
         """
         Set up input handling for the appropriate Belle experiment
         
         Args:
             path: Analysis path to add modules to
             input_file: Path to input file (defaults to self.input_file)
+            preserve_pre_skim_truth: For Belle I signal MC, defer the FixMdst
+                selection until after the truth ntuple. Call
+                apply_belle1_fix_mdst_skim before reconstruction.
             
         Returns:
             True if Belle I input was set up, False otherwise
@@ -222,35 +234,28 @@ class BelleAnalysisBase:
 
         if input_file is None:
             input_file = self.input_file
+
+        if preserve_pre_skim_truth and not (self.is_belle1 and self.is_signal_mc):
+            raise ValueError("Pre-skim truth requires Belle I signal MC")
+        if preserve_pre_skim_truth and self.has_initialized_conversion:
+            raise RuntimeError("Pre-skim truth must be configured before input setup")
             
         if self.is_belle1 and not self.has_initialized_conversion:
             # Import needed modules for conversion
             from b2biiConversion import convertBelleMdstToBelleIIMdst
             
-            # Use Belle I to Belle II conversion
-            # implementation for reconstruction, if need read generate level distribution, 
-            # set applySkim = False
-            #if self.is_signal_mc:
+            # Keep the original skim unless the caller explicitly defers it.
             convertBelleMdstToBelleIIMdst(
                 input_file, 
                 enableNisKsFinder=True,
                 enableEvtcls=True, 
                 HadronA=True, 
                 HadronB=True, 
-                applySkim=True,
+                applySkim=not preserve_pre_skim_truth,
+                saveResultExtraInfo=preserve_pre_skim_truth,
                 path=path
             )
-#            else:
-#                convertBelleMdstToBelleIIMdst(
-#                    input_file, 
-#                    applySkim=False, 
-#                    useBelleDBServer=None, 
-#                    convertBeamParameters=True,
-#                    generatorLevelReconstruction=False, generatorLevelMCMatching=False, entrySequences=None,
-#                    matchType2E9oE25Threshold=-1.1, enableNisKsFinder=True, HadronA=True, HadronB=True,
-#                    enableRecTrg=False, enableEvtcls=True, SmearTrack=2, enableLocalDB=True,
-#                    path=path)
-#           
+
             self.has_initialized_conversion = True
             return True
         elif not self.has_initialized_conversion:
@@ -260,6 +265,11 @@ class BelleAnalysisBase:
             return False
             
         return self.is_belle1
+
+    def apply_belle1_fix_mdst_skim(self, path):
+        """Apply the saved FixMdst decision after recording pre-skim truth."""
+        path.add_module(_RequireFixMdstResult())
+        ma.applyEventCuts('eventExtraInfo(FixMdstResult) > 0', path=path)
     
         
     def setup_common_aliases(self):
@@ -371,7 +381,8 @@ class BelleAnalysisBase:
                 Example: extra_variables={"phi": ['M'], "final": ['theta']}
         
         Returns:
-            List of truth variable names
+            List of truth variable names. The truth ntuple has one row per
+            selected candidate, not necessarily one row per input event.
         """
         if output_file == None:
             output_file = self.output_file
@@ -451,5 +462,9 @@ v3.1.0
 v3.2.0
 - 2026-11-21
 - add cut flow module
+
+v3.2.1
+- 2026-11-23
+- fix belle1 truth level MC reconstruction problem
 
 """
