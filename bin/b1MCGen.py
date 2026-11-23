@@ -15,6 +15,9 @@ import sys
 import pickle
 import logging
 import argparse
+import math
+import shlex
+import subprocess
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, Set, Any
 from functools import lru_cache
@@ -62,7 +65,7 @@ class RunDatabaseEntry:
 class Belle1MCGen:
     """Belle1 configuration manager class, responsible for reading and managing Belle1 configuration information"""
     
-    def __init__(self, exps:List[int], dts:List[str], base_dir: str, nevents: int,lsf_q = "s"):
+    def __init__(self, exps:List[int], dts:List[str], base_dir: str, nevents: int,lsf_q = "s", *, skip_exp19: bool = False):
         """
         Initialize the configuration manager
         
@@ -85,6 +88,7 @@ class Belle1MCGen:
         # Job parameters
         self.total_events = nevents
         self.experiments = exps  # empty means all valid experiments
+        self.skip_exp19 = skip_exp19
         self.dataset_types = dts  # empty means all dataset types
         self.process_name = ""
         self.model_file = ""
@@ -277,7 +281,7 @@ class Belle1MCGen:
         
         dts_selected = self.dataset_types
         exps_selected = self.experiments
-        if len(dts_selected) == 0 and len(exps_selected) == 0:
+        if not self.skip_exp19 and len(dts_selected) == 0 and len(exps_selected) == 0:
             self.selected_runs = list(self.run_database.values())
             logger.info("No dataset types or experiments specified, loading all valid runs")
             return True 
@@ -296,6 +300,8 @@ class Belle1MCGen:
             for key, entry in self.run_database.items():
                 exp, run_num = key
 
+                if self.skip_exp19 and exp == 19:
+                    continue
                 if len(exps_selected) != 0 and exp not in exps_selected:
                     continue
                 if len(dts_selected) != 0 and entry.dataset not in dts_selected:
@@ -395,6 +401,12 @@ class Belle1MCGen:
             int: Number of events actually distributed
         """
         total_events = self.total_events
+        if total_events < 0:
+            raise ValueError("Total event count must not be negative")
+        if not self.selected_runs:
+            raise ValueError("No runs selected for event distribution")
+        if any(not math.isfinite(run.luminosity) or run.luminosity < 0 for run in self.selected_runs):
+            raise ValueError("Run luminosities must be finite and nonnegative")
             
         logger.info(f"Distributing {total_events} events...")
         
@@ -402,29 +414,17 @@ class Belle1MCGen:
         for run in self.selected_runs:
             run.events = 0
         
-        # Ensure luminosity fractions have been calculated
-        if not hasattr(self.selected_runs[0], 'luminosity_fraction') or self.selected_runs[0].luminosity_fraction == 0:
-            self.calculate_luminosity_fractions()
-        
-        # Record distributed events total, used to track rounding errors
-        distributed_events = 0
-        
-        # Distribute events using luminosity fractions with rounding
+        self.calculate_luminosity_fractions()
+        remainders = []
         for run in self.selected_runs:
-            run.events = round(total_events * run.luminosity_fraction)
-            distributed_events += run.events
-        
-        # Handle rounding errors, ensure total event count is correct
-        remaining_events = total_events - distributed_events
-        if remaining_events != 0:
-            sorted_runs = sorted(self.selected_runs, key=lambda r: r.luminosity_fraction, reverse=True)
-            
-            # Distribute remaining events (positive or negative) to top runs one by one
-            for i in range(abs(remaining_events)):
-                if remaining_events > 0:
-                    sorted_runs[i % len(sorted_runs)].events += 1
-                else:
-                    sorted_runs[i % len(sorted_runs)].events -= 1
+            quota = total_events * run.luminosity_fraction
+            run.events = math.floor(quota)
+            remainders.append((quota - run.events, run))
+        remaining_events = total_events - sum(run.events for run in self.selected_runs)
+        if not 0 <= remaining_events <= len(remainders):
+            raise ValueError("Cannot distribute events due to invalid luminosity fractions")
+        for _, run in sorted(remainders, key=lambda pair: pair[0], reverse=True)[:remaining_events]:
+            run.events += 1
         
         # Print detailed distribution information
         if logger.isEnabledFor(logging.DEBUG):
@@ -560,78 +560,50 @@ class Belle1MCGen:
             current_job_events = 0
             job_index = 0
             
-            for run in runs:
-                # If adding this run would exceed the limit, submit current job and start a new one
-                if current_job_events + run.events > MAX_EVENTS_PER_JOB and current_job_runs:
-                    # Submit current job
-                    min_run = min(r.run for r in current_job_runs)
-                    max_run = max(r.run for r in current_job_runs)
-                    job_id = f"{min_run}" if min_run == max_run else f"{min_run}_{max_run}"
-                    output_file = f"e{exp}_r{job_id}_j{job_index}.dat"
-                    log_file = f"e{exp}_r{job_id}_j{job_index}.log"
-                    
-                    cmd = [
-                        "bsub", "-q", self.queue,
-                        "-o", os.path.join(output_dir, log_file),
-                        "basf2", self.model_file, "--",
-                        str(exp), str(min_run), str(current_job_events), bg_file,
-                        os.path.join(output_dir, output_file)
-                    ]
-                    
-                    try:
-                        logger.info(f"Submitting job: exp={exp}, runs={len(current_job_runs)}, "
-                                   f"run_range={min_run}-{max_run}, events={current_job_events}, bg={bg_file}")
-                        if not self.dry_run:
-                            import subprocess
-                            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                            job_info = result.stdout.strip()
-                            logger.info(f"Job submitted: {job_info}")
-                            self.job_ids.append(job_info.split("<")[1].split(">")[0] if "<" in job_info else "unknown")
-                            jobs_submitted += 1
-                        else:
-                            logger.info(f"[DRY RUN] Would submit command: {' '.join(cmd)}")
-                    except Exception as e:
-                        logger.error(f"Error submitting job for exp {exp} bg {bg_file}: {e}")
-                    
-                    # Reset for next job
-                    current_job_runs = []
-                    current_job_events = 0
-                    job_index += 1
-                
-                # Add current run to the job
-                current_job_runs.append(run)
-                current_job_events += run.events
-            
-            # Submit the last job if any runs left
-            if current_job_runs:
+            def submit_chunk():
+                nonlocal jobs_submitted, job_index
                 min_run = min(r.run for r in current_job_runs)
                 max_run = max(r.run for r in current_job_runs)
                 job_id = f"{min_run}" if min_run == max_run else f"{min_run}_{max_run}"
                 output_file = f"e{exp}_r{job_id}_j{job_index}.dat"
                 log_file = f"e{exp}_r{job_id}_j{job_index}.log"
-                
                 cmd = [
-                    "bsub", "-q", self.queue, 
+                    "bsub", "-q", self.queue,
                     "-o", os.path.join(output_dir, log_file),
                     "basf2", self.model_file, "--",
                     str(exp), str(min_run), str(current_job_events), bg_file,
                     os.path.join(output_dir, output_file)
                 ]
-                
-                try:
-                    logger.info(f"Submitting job: exp={exp}, runs={len(current_job_runs)}, "
-                               f"run_range={min_run}-{max_run}, events={current_job_events}, bg={bg_file}")
-                    if not self.dry_run:
-                        import subprocess
-                        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                        job_info = result.stdout.strip()
-                        logger.info(f"Job submitted: {job_info}")
-                        self.job_ids.append(job_info.split("<")[1].split(">")[0] if "<" in job_info else "unknown")
-                        jobs_submitted += 1
-                    else:
-                        logger.info(f"[DRY RUN] Would submit command: {' '.join(cmd)}")
-                except Exception as e:
-                    logger.error(f"Error submitting job for exp {exp} bg {bg_file}: {e}")
+                logger.info(f"Submitting job: exp={exp}, runs={len(current_job_runs)}, "
+                            f"run_range={min_run}-{max_run}, events={current_job_events}, bg={bg_file}")
+                if not self.dry_run:
+                    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+                    job_info = result.stdout.strip()
+                    logger.info(f"Job submitted: {job_info}")
+                    self.job_ids.append(job_info.split("<")[1].split(">")[0] if "<" in job_info else "unknown")
+                    jobs_submitted += 1
+                else:
+                    logger.info(f"[DRY RUN] Would submit command: {' '.join(cmd)}")
+                job_index += 1
+
+            for run in runs:
+                remaining = run.events
+                while remaining:
+                    if current_job_runs and remaining > MAX_EVENTS_PER_JOB - current_job_events:
+                        submit_chunk()
+                        current_job_runs = []
+                        current_job_events = 0
+                    take = min(remaining, MAX_EVENTS_PER_JOB - current_job_events)
+                    current_job_runs.append(run)
+                    current_job_events += take
+                    remaining -= take
+                    if current_job_events == MAX_EVENTS_PER_JOB:
+                        submit_chunk()
+                        current_job_runs = []
+                        current_job_events = 0
+
+            if current_job_runs:
+                submit_chunk()
         
         logger.info(f"Submitted {jobs_submitted} generation jobs")
         return jobs_submitted
@@ -747,6 +719,9 @@ class Belle1MCGen:
             logger.error(f"Requested event number ({n}) exceeds maximum allowed ({MAX_EVENTS_PER_JOB}) for a single job.")
             return 0
 
+        if self.skip_exp19 and experiment == 19:
+            raise ValueError("Experiment 19 is excluded by --skip_exp19")
+
         gen_dir = os.path.join(self.work_dir, "gen")
         os.makedirs(gen_dir, exist_ok=True)
 
@@ -789,65 +764,6 @@ class Belle1MCGen:
             return 0
 
 
-    def submit_generation_phokhara_bin_batch(self):
-        """
-        generation flat for phokhara bin batch jobs
-
-        Returns:
-            int: Number of jobs submitted (0 or 1)
-        """
-
-        gen_dir = os.path.join(self.work_dir, "gen")
-        os.makedirs(gen_dir, exist_ok=True)
-
-        self.experiments = [51]  # only use experiment 51 and 4S
-        self.dts = ["4S"]
-        self.load_selected_runs()
-        runs_map = self.get_avail_exp_runs()
-        runs = runs_map[51][:200]
-        #runs = [5, 56, 66, 75, 82]
-        print(len(runs))
-
-        i = 0
-        jobs_submitted = 0
-        for run in runs:
-            logger.info(f"submitting phokhara bin batch for run {run}")
-            bg_file = self.get_background_file(51, run)
-            cmd = [
-                "bsub", 
-                "-q", self.queue,
-                "-o",
-                f"{gen_dir}/e{51}_r{run}.log",
-                "basf2",
-                self.model_file,
-                "--",
-                str(51),
-                str(run),
-                str(5000),
-                bg_file,
-                f"{gen_dir}/e{51}_r{run}.dat",
-                str(i)
-            ]
-            i += 1
-            try:
-                logger.info(f"Submitting generation job for experiment {51} run {run}, bin {i}")
-                if not self.dry_run:
-                    import subprocess
-                    result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-                    job_info = result.stdout.strip()
-                    logger.info(f"Job submitted: {job_info}")
-                    self.job_ids.append(job_info.split("<")[1].split(">")[0] if "<" in job_info else "unknown")
-                    jobs_submitted += 1
-                else:
-                    logger.info(f"[DRY RUN] Would submit command: {' '.join(cmd)}")
-            except Exception as e:
-                logger.error(f"Error submitting generation job for experiment {51} run {run}: {e}")
-                continue
-        
-        logger.info(f"Submitted {jobs_submitted} individual generation jobs")
-        return jobs_submitted
-
-    
     def submit_gsim_jobs(self):
         """
         Submit GSIM jobs by finding generated dat files and creating specific scripts for each run.
@@ -871,20 +787,21 @@ class Belle1MCGen:
         import re
         import subprocess
         
-        jobs_submitted = 0
-        
         # Find all potential input dat files from the generation step
-        input_files = glob.glob(os.path.join(gen_dir, "**", "e*_r*.dat"), recursive=True)
+        input_files = sorted(glob.glob(os.path.join(gen_dir, "**", "e*_r*.dat"), recursive=True))
         
         if not input_files:
             logger.warning(f"No input .dat files found in {gen_dir}. Nothing to simulate.")
             return 0
             
         logger.info(f"Found {len(input_files)} potential input files for GSIM.")
+        logger.warning("GSIM random seeds have not been verified to be independent between jobs; do not use for production.")
 
         # Create a quick lookup map for run data
         run_map = {(r.experiment, r.run): r for r in self.selected_runs}
 
+        jobs = []
+        targets = set()
         for dst_path in input_files:
             filename = os.path.basename(dst_path)
             # Try to extract experiment and run number from filename
@@ -902,34 +819,66 @@ class Belle1MCGen:
                 logger.warning(f"No run database entry found for exp {experiment}, run {run_number}. Skipping file {filename}.")
                 continue
 
-            # --- Create GSIM files inside run_work_dir ---
+            stem = os.path.splitext(os.path.relpath(dst_path, gen_dir))[0]
+            output_mdst_file = os.path.abspath(os.path.join(sim_dir, stem + ".mdst"))
+            gsim_input_file = os.path.abspath(os.path.join(work_base_dir, stem + "_gsim.dat"))
+            basf_script_file = os.path.abspath(os.path.join(work_base_dir, stem + "_gsim.basf"))
+            wrapper_script_file = os.path.abspath(os.path.join(work_base_dir, stem + "_gsim_run.sh"))
+            submit_script_file = os.path.abspath(os.path.join(work_base_dir, stem + "_gsim_submit.sh"))
+            log_file = os.path.abspath(os.path.join(sim_dir, stem + "_gsim.log"))
+            partial = output_mdst_file + ".partial"
+            input_check = os.path.abspath(os.path.join(work_base_dir, stem + "_input_check.log"))
+            output_check = os.path.abspath(os.path.join(work_base_dir, stem + "_output_check.log"))
+            dst_path = os.path.abspath(dst_path)
+            for path in (dst_path, output_mdst_file, gsim_input_file, basf_script_file):
+                if any(c.isspace() or c == "\\" for c in path):
+                    raise ValueError(f"BASF paths cannot contain whitespace or backslashes: {path}")
+            if len(os.fsencode(os.path.basename(gsim_input_file))) > 132:
+                raise ValueError(f"GSIM_INPUT filename exceeds BASF's 132-byte limit: {gsim_input_file}")
+            job_targets = (output_mdst_file, output_mdst_file + ".index", output_mdst_file + ".lock",
+                           partial, partial + ".index", partial + ".lock", log_file, input_check, output_check,
+                           gsim_input_file, basf_script_file, wrapper_script_file, submit_script_file)
+            for path in job_targets:
+                if path in targets or os.path.lexists(path):
+                    raise FileExistsError(f"Refusing to overwrite GSIM job file: {path}")
+                targets.add(path)
+            jobs.append((experiment, run_number, run_data, dst_path, output_mdst_file,
+                         gsim_input_file, basf_script_file, wrapper_script_file, submit_script_file,
+                         input_check, output_check, log_file))
 
-            # 1. Create GSIM input file (gsim.dat)
-            gsim_input_file = os.path.join(work_base_dir, f"e{experiment}_r{run_number}_gsim.dat")
+        # Reserve each job with an exclusive file creation before submitting any job.
+        # A previous invocation (including a dry run) must not be overwritten.
+        for (experiment, run_number, run_data, dst_path, output_mdst_file,
+             gsim_input_file, basf_script_file, wrapper_script_file, submit_script_file,
+             input_check, output_check, log_file) in jobs:
+            os.makedirs(os.path.dirname(output_mdst_file), exist_ok=True)
+            os.makedirs(os.path.dirname(gsim_input_file), exist_ok=True)
             self._create_gsim_input_file(gsim_input_file, experiment, run_number)
+            self._create_gsim_basf_script(basf_script_file, experiment, run_number,
+                                          output_mdst_file + ".partial", dst_path, gsim_input_file)
+            self._create_gsim_wrapper_script(wrapper_script_file, experiment, run_data.background_file,
+                                              basf_script_file, output_mdst_file + ".partial")
+            runner = os.path.join(os.path.dirname(os.path.realpath(__file__)), "b1MCGen_gsim_runner.py")
+            with open(submit_script_file, "x") as f:
+                args = [runner, str(experiment), str(run_number), dst_path, output_mdst_file,
+                        gsim_input_file, basf_script_file, wrapper_script_file, input_check, output_check]
+                f.write("#!/bin/bash\nexec python3 " + " ".join(shlex.quote(arg) for arg in args) + "\n")
+            os.chmod(submit_script_file, 0o755)
 
-            # 2. Create BASF script file (gsim.basf)
-            output_mdst_file = os.path.join(sim_dir, f"e{experiment}_r{run_number}.mdst")
-            basf_script_file = os.path.join(work_base_dir, f"e{experiment}_r{run_number}_gsim.basf")
-            self._create_gsim_basf_script(basf_script_file, experiment, run_number, 
-                                         output_mdst_file, dst_path)
-
-            # 3. Create a robust wrapper script that sets env and runs basf
-            wrapper_script_file = os.path.join(work_base_dir, f"e{experiment}_r{run_number}_gsim_run.sh")
-            self._create_gsim_wrapper_script(wrapper_script_file, experiment, run_data.background_file, basf_script_file)
-
-            # 4. Submit the wrapper script directly
-            log_file = os.path.join(sim_dir, f"e{experiment}_r{run_number}_gsim.log")
+        jobs_submitted = 0
+        for (experiment, run_number, run_data, dst_path, output_mdst_file,
+             gsim_input_file, basf_script_file, wrapper_script_file, submit_script_file,
+             input_check, output_check, log_file) in jobs:
             cmd = [
                 "bsub",
                 "-q", self.queue,
-                "-oo", log_file,
-                os.path.abspath(wrapper_script_file),
+                "-o", log_file,
+                submit_script_file,
             ]
             
             # Submit job
             try:
-                logger.info(f"Submitting GSIM job for exp={experiment} run={run_number} with input {filename}")
+                logger.info(f"Submitting GSIM job for exp={experiment} run={run_number} with input {dst_path}")
                 if not self.dry_run:
                     result = subprocess.run(cmd, capture_output=True, text=True, check=True)
                     job_info = result.stdout.strip()
@@ -938,10 +887,10 @@ class Belle1MCGen:
                     jobs_submitted += 1
                 else:
                     logger.info(f"[DRY RUN] Would submit command: {' '.join(cmd)}")
-            except Exception as e:
+            except (OSError, subprocess.CalledProcessError) as e:
                 logger.error(f"Error submitting GSIM job for exp={experiment} run={run_number}: {e}")
                 logger.error(f"Failed command: {' '.join(cmd)}")
-                continue
+                raise
         
         logger.info(f"Submitted {jobs_submitted} GSIM jobs")
         return jobs_submitted
@@ -949,7 +898,7 @@ class Belle1MCGen:
     
     def _create_gsim_input_file(self, filename, experiment, run_number):
         """Create GSIM input configuration file"""
-        with open(filename, 'w') as f:
+        with open(filename, 'x') as f:
             f.write("LIST\n")
             f.write("DEBU 0 0 0 (main)\n")
             f.write("SWIT 1 3 0 0 0 0 1 0\n")
@@ -969,7 +918,8 @@ class Belle1MCGen:
             f.write("BP  1 (Beam pipe)\n")
             f.write("CRY 1 (Cryostat)\n")
             f.write("MAG 1 (Coil)\n")
-            f.write("TRG 0 (Trigger Hit record)\n")
+            if experiment > 27:  # TRG is not registered by the SVD1 GSIM FFREAD dictionary.
+                f.write("TRG 0 (Trigger Hit record)\n")
             f.write("BFLD 21\n")
             f.write(f"EXPN {experiment}\n")
             f.write(f"RUNG {run_number} 1\n")
@@ -983,16 +933,16 @@ class Belle1MCGen:
             f.write("END\n")
 
 
-    def _create_gsim_basf_script(self, filename, experiment, run, output_file, input_dst, tsim = False):
+    def _create_gsim_basf_script(self, filename, experiment, run, output_file, input_dst, gsim_input_file, tsim = False):
         """Create BASF script for GSIM simulation - based on mcprod5-e07.basf"""
-        with open(filename, 'w') as f:
+        with open(filename, 'x') as f:
             if experiment > 30:
                 f.write("path add_module main ProcessHeader\n")
                 f.write("path add_module main cdctable genunpak\n")
                 f.write("path add_module main gsim acc_mc calsvd addbg\n")
             else:
                 f.write("path add_module main cdctable genunpak\n")
-                f.write("path add_module main bpsmear gsim acc_mc calsvd addbg\n")
+                f.write("path add_module main gsim acc_mc calsvd addbg\n")
             
             if experiment > 30:
                 f.write("path add_module main tof_datT0TS tsimtof calcdc l4 evtime l0svd tsimsvd\n")
@@ -1010,21 +960,13 @@ class Belle1MCGen:
             f.write("\n")
 
             # GSIM input file
-            f.write(f"module put_parameter gsim GSIM_INPUT\\e{experiment}_r{run}_gsim.dat\n")
+            f.write(f"module put_parameter gsim GSIM_INPUT\\{os.path.basename(gsim_input_file)}\n")
             f.write("module put_parameter addbg LUMDEP\\1\n")
             
             if experiment > 30 and experiment != 73:
                 f.write("module put_parameter addbg SEQRD\\0\n")
                 f.write("module put_parameter addbg RANRD\\1\n")
                 f.write("\n")
-            
-            # add bpsmear IP parameters ,tempolarily using fixed values
-            f.write("module put_parameter bpsmear ip_nominal_x\0.04596")
-            f.write("module put_parameter bpsmear ip_nominal_y\0.04777")
-            f.write("module put_parameter bpsmear ip_nominal_z\-0.2282")
-            f.write("module put_parameter bpsmear sigma_ip_x\0.007375")
-            f.write("module put_parameter bpsmear sigma_ip_y\0.0004463")
-            f.write("module put_parameter bpsmear sigma_ip_z\0.3190 ")
             
             if tsim:
                 f.write("module put_parameter rectrg Time_window_lo\\-1.0\n")
@@ -1060,7 +1002,7 @@ class Belle1MCGen:
             f.write("terminate\n")
 
 
-    def _create_gsim_wrapper_script(self, filename, experiment, background_file, basf_script_path):
+    def _create_gsim_wrapper_script(self, filename, experiment, background_file, basf_script_path, output_file):
         """Create wrapper script that sets up environment and runs BASF - based on rec.csh"""
         basf_script_path = os.path.abspath(basf_script_path)
         env_dir = os.path.dirname(basf_script_path)
@@ -1071,7 +1013,7 @@ class Belle1MCGen:
         else:
             belle_level = "b20090127_0910"  # SVD2 period
 
-        with open(filename, 'w') as f:
+        with open(filename, 'x') as f:
             f.write("#!/bin/bash\n")
             f.write(f"# GSIM wrapper script for experiment {experiment}\n")
             f.write("# Based on rec.csh logic\n")
@@ -1087,25 +1029,39 @@ class Belle1MCGen:
             f.write("export USE_GRAND_REPROCESS_DATA=1\n")
             f.write("\n")
             f.write("# Source Belle environment\n")
-            f.write("source /sw/belle/local/etc/bashrc_general\n")
+            f.write("source /sw/belle/local/etc/bashrc_general || exit 1\n")
             f.write("\n")
             f.write("# Set BASF parameters (after sourcing)\n")
             f.write("export BASF_NPROCESS=1\n")  
             #f.write("export BASF_USER_INIT=geant_init.so\n")
             #f.write("export BASF_USER_IF=basfsh.so\n")
-            f.write(f'export ADDBG_DAT="{background_file}"\n')
+            f.write(f"export ADDBG_DAT={shlex.quote(background_file)}\n")
             f.write("\n")
             f.write("# Change to script directory\n")
-            f.write(f"cd {env_dir}\n")
+            f.write(f"cd {shlex.quote(env_dir)} || exit 1\n")
+            f.write("if ! command -v basf >/dev/null; then echo 'ERROR: basf not found' >&2; exit 1; fi\n")
+            if experiment <= 27:
+                f.write('if [[ -n $MY_TOP_DIR && -x $MY_TOP_DIR/bin/basf ]]; then '
+                        'basf_binary=$MY_TOP_DIR/bin/basf; else basf_binary=$BELLE_RUN_DIR/bin/basf; fi\n')
+            else:
+                f.write('basf_binary=$(command -v basf)\n')
+            f.write("deps=$(ldd \"$basf_binary\" 2>&1) || { echo \"ERROR: cannot inspect $basf_binary: $deps\" >&2; exit 1; }\n")
+            f.write("if [[ $deps == *'not found'* || $deps == *'wrong ELF class'* ]]; then "
+                    "echo \"ERROR: missing BASF dependencies: $deps\" >&2; exit 1; fi\n")
+            f.write(f"if ! mkdir {shlex.quote(output_file + '.lock')}; then "
+                    "echo 'ERROR: GSIM job already started or locked' >&2; exit 1; fi\n")
+            f.write(f"if [[ -e {shlex.quote(output_file)} || -L {shlex.quote(output_file)} || "
+                    f"-e {shlex.quote(output_file + '.index')} || -L {shlex.quote(output_file + '.index')} ]]; "
+                    "then echo 'ERROR: GSIM output already exists' >&2; exit 1; fi\n")
             f.write("\n")
             f.write("date\n")
             f.write(f'echo "Starting GSIM for experiment {experiment}"\n')
             f.write(f'echo "BELLE_LEVEL: {belle_level}"\n')
             f.write(f'echo "Working directory: $(pwd)"\n')
-            f.write(f'echo "Background file: {background_file}"\n')
+            f.write('echo "Background file: $ADDBG_DAT"\n')
             f.write("\n")
             f.write("# Run BASF and filter out empty lines and '0: ' lines\n")
-            f.write(f"basf {basf_script_path} 2>&1 | grep -v -E '^$|^0: *$'\n")
+            f.write(f"basf {shlex.quote(basf_script_path)} 2>&1 | grep -v -E '^$|^0: *$'\n")
             f.write("EXIT_CODE=${PIPESTATUS[0]}\n")
             f.write("\n")
             f.write("date\n")
@@ -1141,6 +1097,7 @@ def main():
     parser.add_argument("--n", type=int, default=10000, help="total events to generate")
     parser.add_argument("--dts", type=str, default=[], nargs='+', help="dataset types (4S, 4S_offres, etc.)")
     parser.add_argument("--exps", type=int, default=[], nargs='+', help="experiment numbers (7, 9, 11, etc.)")
+    parser.add_argument("--skip_exp19", action="store_true", help="exclude experiment 19 before event allocation and simulation")
 
     # Add CLI for specific exp/run generation
     parser.add_argument("--gen_exp_run", action="store_true", help="submit generation job for specific experiment and run")
@@ -1148,8 +1105,6 @@ def main():
     parser.add_argument("--run", type=int, help="run number for --gen_exp_run")
     parser.add_argument("--n_run", type=int, default=7500, help="number of events for --gen_exp_run")
     
-    parser.add_argument("--batch_bin_production", action="store_true", help="test generation flat for phokhara bin batch jobs")
-
     args = parser.parse_args()
     
     # Simple validation
@@ -1157,11 +1112,13 @@ def main():
         parser.error("--gen requires --top_dir and --model_file")
     if args.sim and not args.top_dir:
         parser.error("--sim requires --top_dir")
-    if args.batch_bin_production and (not args.top_dir or not args.model_file):
-        parser.error("--gen requires --top_dir and --model_file")
-
     # Initialize
-    MCGen = Belle1MCGen(base_dir=args.base_dir, dts=args.dts, exps=args.exps, nevents=args.n, lsf_q=args.queue)
+    if args.skip_exp19 and args.gen_exp_run and args.exp == 19:
+        parser.error("--skip_exp19 conflicts with --gen_exp_run --exp 19")
+    MCGen = Belle1MCGen(base_dir=args.base_dir, dts=args.dts, exps=args.exps, nevents=args.n, lsf_q=args.queue,
+                        skip_exp19=args.skip_exp19)
+    if args.skip_exp19 and not MCGen.selected_runs:
+        parser.error("no runs remain after applying --skip_exp19 and selection filters")
     MCGen.dry_run = args.dry_run
     
     if args.verbose:
@@ -1198,11 +1155,5 @@ def main():
         MCGen.work_dir = args.top_dir
         MCGen.submit_generation_exp_run(args.exp, args.run, args.n_run)
     
-    if args.batch_bin_production:
-        MCGen.model_file = args.model_file
-        MCGen.work_dir = args.top_dir
-        MCGen.submit_generation_phokhara_bin_batch()
-
-
 if __name__ == "__main__":
     main()
