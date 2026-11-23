@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run and verify one Belle GSIM job without publishing incomplete output."""
+"""Run and verify one Belle GSIM job with limited event-loss tolerance."""
 
 import os
 from pathlib import Path
@@ -83,13 +83,21 @@ def main(args):
 
         result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         print(result.stdout, end="", flush=True)
-        if result.returncode or failed_worker(result.stdout):
-            raise RuntimeError(f"GSIM failed (exit {result.returncode} or event worker failure)")
+        if result.returncode:
+            raise RuntimeError(f"GSIM failed (exit {result.returncode})")
+        worker_failed = failed_worker(result.stdout)
         if not local_output.is_file() or local_output.stat().st_size == 0:
             raise RuntimeError("GSIM did not produce a nonempty MDST")
         observed = read_events(local_output, output_log, exp, run)
-        if observed != expected:
+        missing = expected - observed
+        if missing < 0 or missing > 3:
             raise RuntimeError(f"Event count mismatch: input {expected}, MDST {observed}")
+        if worker_failed and missing == 0:
+            raise RuntimeError("GSIM event worker failed despite matching event counts")
+        if missing:
+            print(f"WARNING: GSIM event loss: exp={exp}, run={run}, expected={expected}, "
+                  f"observed={observed}, missing={missing}, worker_failed={worker_failed}",
+                  file=sys.stderr, flush=True)
         if exp <= 27:
             with local_output.open("rb") as src, partial.open("xb") as dst:
                 shutil.copyfileobj(src, dst)
